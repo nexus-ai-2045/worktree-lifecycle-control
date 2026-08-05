@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worktree-lifecycle-control"
+version = "0.1.0"
+description = "Read-only Git worktree lifecycle inventory and cleanup readiness gate"
+requires-python = ">=3.11"
+
+[project.scripts]
+worktree-lifecycle = "worktree_lifecycle_control.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
