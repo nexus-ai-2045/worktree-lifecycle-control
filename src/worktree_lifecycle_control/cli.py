@@ -13,6 +13,7 @@ from typing import Any, Sequence, TextIO
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
+from .closeout_adapter import CloseoutAdapterError, evidence_from_closeout_collect
 from .evidence import validate_integration_evidence
 
 
@@ -426,6 +427,26 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--registry", type=Path)
     review.add_argument("--report-path", type=Path, required=True)
     review.add_argument("--json", action="store_true")
+    evidence = subparsers.add_parser(
+        "evidence-from-closeout",
+        help="normalize post_merge_closeout_report collect JSON into integration-evidence-v2",
+    )
+    evidence.add_argument(
+        "--input",
+        type=Path,
+        help="path to collect JSON; defaults to stdin",
+    )
+    evidence.add_argument("--output", type=Path, help="optional path to write evidence JSON")
+    evidence.add_argument(
+        "--subject-head-sha",
+        help="override PR head SHA when collect JSON lacks commits",
+    )
+    evidence.add_argument(
+        "--no-gh-enrich",
+        action="store_true",
+        help="do not call gh to fill missing subject_head_sha",
+    )
+    evidence.add_argument("--json", action="store_true", help="print evidence JSON to stdout")
     return parser
 
 
@@ -457,6 +478,27 @@ def write_json_atomic(path: Path, rendered: str) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     configure_stdio()
     args = build_parser().parse_args(argv)
+    if args.command == "evidence-from-closeout":
+        try:
+            if args.input is None:
+                raw = sys.stdin.read()
+            else:
+                raw = args.input.read_text(encoding="utf-8")
+            payload = json.loads(raw)
+            evidence = evidence_from_closeout_collect(
+                payload,
+                subject_head_sha=args.subject_head_sha,
+                allow_gh_enrich=not args.no_gh_enrich,
+            )
+        except (OSError, json.JSONDecodeError, CloseoutAdapterError) as exc:
+            emit(f"error: {exc}")
+            return 2
+        rendered = json.dumps(evidence, ensure_ascii=False, indent=2)
+        if args.output is not None:
+            write_json_atomic(args.output, rendered)
+        if args.json or args.output is None:
+            emit(rendered)
+        return 0
     unique_repos: list[Path] = []
     seen_repos: set[str] = set()
     for repo in args.repo:

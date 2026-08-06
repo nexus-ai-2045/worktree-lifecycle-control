@@ -405,3 +405,60 @@ def test_repos_are_deduplicated_by_git_common_dir(tmp_path, monkeypatch) -> None
     )
     assert main(["scan", "--repo", str(tmp_path), "--repo", str(tmp_path / "linked")]) == 0
     assert len(calls) == 1
+
+from worktree_lifecycle_control.closeout_adapter import (
+    CloseoutAdapterError,
+    evidence_from_closeout_collect,
+)
+from worktree_lifecycle_control.evidence import validate_integration_evidence
+
+
+def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
+    payload = {
+        "decision": "pass",
+        "pr_state": {
+            "number": 1,
+            "state": "MERGED",
+            "mergedAt": "2026-08-06T07:39:04Z",
+            "mergeCommit": {"oid": "32e999b4e611d2ad99d95442c53d760a196e2571"},
+            "commits": [
+                {"oid": "f5b0a5fdae56e34bd5117c6487e31ce86ebbfc1c"},
+                {"oid": "931ce10e9dcd1e7e44a1980fc279c10db28aae94"},
+            ],
+        },
+        "account_context": {
+            "checks": {"active_api_login": {"status": "ok", "value": "nexus-ai-2045"}}
+        },
+    }
+    evidence = evidence_from_closeout_collect(payload)
+    assert evidence["status"] == "verified"
+    assert evidence["provider"] == "github"
+    assert evidence["evidence_type"] == "github_pr_merged"
+    assert evidence["provider_record_id"] == "github-pr:1"
+    assert evidence["subject_head_sha"] == "931ce10e9dcd1e7e44a1980fc279c10db28aae94"
+    assert evidence["resulting_base_sha"] == "32e999b4e611d2ad99d95442c53d760a196e2571"
+    assert evidence["actor"] == "nexus-ai-2045"
+    assert evidence["observed_at"] == "2026-08-06T07:39:04Z"
+    validation = validate_integration_evidence(
+        evidence,
+        "931ce10e9dcd1e7e44a1980fc279c10db28aae94",
+    )
+    assert validation.verified is True
+    assert validation.errors == ()
+
+
+def test_evidence_from_closeout_collect_rejects_open_pr() -> None:
+    payload = {
+        "pr_state": {
+            "number": 2,
+            "state": "OPEN",
+            "mergedAt": "2026-08-06T07:39:04Z",
+            "mergeCommit": {"oid": "32e999b4e611d2ad99d95442c53d760a196e2571"},
+            "commits": [{"oid": "931ce10e9dcd1e7e44a1980fc279c10db28aae94"}],
+        }
+    }
+    try:
+        evidence_from_closeout_collect(payload)
+        assert False, "expected CloseoutAdapterError"
+    except CloseoutAdapterError as exc:
+        assert "MERGED" in str(exc)

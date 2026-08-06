@@ -48,6 +48,17 @@ python -m worktree_lifecycle_control review-packet `
   --json
 ```
 
+既存の closeout collector から統合証跡を正規化できます（GitHub 取得は collector 側）。
+
+```powershell
+python $env:USERPROFILE\Projects\shared\scripts\post_merge_closeout_report.py collect `
+  --repo nexus-ai-2045/worktree-lifecycle-control `
+  --pr 1 `
+  --cwd . `
+  --json |
+  python -m worktree_lifecycle_control evidence-from-closeout --json
+```
+
 GitHub固有のadapterは、統合済み判定に次をすべて返す必要があります。
 
 - `status: verified`
