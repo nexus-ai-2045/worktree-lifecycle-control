@@ -4,15 +4,43 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, TextIO
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from .evidence import validate_integration_evidence
+
+
+def configure_stdio() -> None:
+    """Prefer UTF-8 console output so Japanese summaries work on Windows CI hosts."""
+    for stream_name in ("stdout", "stderr"):
+        stream: TextIO | None = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if stream is None or reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            continue
+
+
+def emit(text: str) -> None:
+    """Write text without raising UnicodeEncodeError on legacy Windows code pages."""
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write((text + "\n").encode(encoding, errors="replace"))
+            buffer.flush()
+            return
+        print(text.encode(encoding, errors="replace").decode(encoding, errors="replace"))
 
 
 @dataclass(frozen=True)
@@ -427,6 +455,7 @@ def write_json_atomic(path: Path, rendered: str) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    configure_stdio()
     args = build_parser().parse_args(argv)
     unique_repos: list[Path] = []
     seen_repos: set[str] = set()
@@ -540,15 +569,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.report_path:
         write_json_atomic(args.report_path, rendered)
     if args.json:
-        print(rendered)
+        emit(rendered)
     else:
         for record in records:
-            print(f"{record.disposition:28} {record.path}")
-            print(f"  {human_day_summary(record)}")
+            emit(f"{record.disposition:28} {record.path}")
+            emit(f"  {human_day_summary(record)}")
             for blocker in record.blockers:
-                print(f"  - blocker: {blocker}")
+                emit(f"  - blocker: {blocker}")
             for signal in record.review_signals:
-                print(f"  - review: {signal}")
+                emit(f"  - review: {signal}")
     return 0
 
 
