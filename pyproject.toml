@@ -7,6 +7,10 @@ name = "worktree-lifecycle-control"
 version = "0.1.0"
 description = "Read-only Git worktree lifecycle inventory and cleanup readiness gate"
 requires-python = ">=3.11"
+dependencies = [
+  # Windows GitHub Actions / clean CPython need IANA tzdb for ZoneInfo("Asia/Tokyo").
+  "tzdata>=2024.1",
+]
 
 [project.optional-dependencies]
 test = [
