@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/scan-report-v2.schema.json",
+  "title": "Worktree lifecycle scan report v2",
+  "type": "object",
+  "required": ["schema_version", "run_id", "observed_at", "action", "target", "dry_run", "changed", "scan_completed", "measurement_status", "unknown_count", "registry_validation_status", "read_only", "records", "next_action"],
+  "properties": {
+    "schema_version": {"const": "worktree-lifecycle-report/v2"},
+    "run_id": {"type": "string", "format": "uuid"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "action": {"const": "scan"},
+    "target": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "dry_run": {"const": true},
+    "changed": {"const": false},
+    "scan_completed": {"type": "boolean"},
+    "measurement_status": {"enum": ["complete", "partial"]},
+    "unknown_count": {"type": "integer", "minimum": 0},
+    "registry_validation_status": {"enum": ["valid", "partial", "invalid", "not_checked"]},
+    "read_only": {"const": true},
+    "soft_budget": {"type": "integer", "minimum": 1},
+    "budget_warnings": {"type": "array", "items": {"type": "object"}},
+    "records": {"type": "array", "items": {"$ref": "#/$defs/record"}},
+    "report_path": {"type": ["string", "null"]},
+    "next_action": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "required": ["repo", "path", "observations", "blockers", "review_signals", "disposition"],
+      "properties": {
+        "repo": {"type": "string"}, "path": {"type": "string"}, "head": {"type": ["string", "null"]},
+        "branch": {"type": ["string", "null"]}, "git_locked": {"type": "boolean"}, "lock_reason": {"type": ["string", "null"]},
+        "prunable": {"type": "boolean"}, "exists": {"type": "boolean"}, "dirty": {"type": ["boolean", "null"]},
+        "unpushed_commits": {"type": ["integer", "null"], "minimum": 0}, "owner": {"type": ["string", "null"]},
+        "task": {"type": ["string", "null"]}, "created_at": {"type": ["string", "null"]}, "days_since_created": {"type": ["integer", "null"]},
+        "head_committer_at": {"type": ["string", "null"]}, "days_since_head_commit": {"type": ["integer", "null"]},
+        "expires_at": {"type": ["string", "null"]}, "days_until_review": {"type": ["integer", "null"], "minimum": 0},
+        "overdue_days": {"type": "integer", "minimum": 0}, "lifecycle_status": {"type": ["string", "null"]},
+        "integration_status": {"type": "string"}, "integration_evidence_valid": {"type": "boolean"},
+        "integration_evidence_errors": {"type": "array", "items": {"type": "string"}}, "context_saved": {"type": "boolean"},
+        "observations": {"type": "object"},
+        "blockers": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "review_signals": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "disposition": {"enum": ["orphan_unknown", "active", "protected", "review_required", "cleanup_candidate"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

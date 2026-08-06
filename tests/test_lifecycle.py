@@ -4,7 +4,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from worktree_lifecycle_control.cli import classify, main, parse_porcelain_z
+from worktree_lifecycle_control.cli import (
+    WorktreeRecord,
+    calendar_day_delta,
+    assess_lifecycle,
+    human_day_summary,
+    main,
+    load_registry,
+    parse_porcelain_z,
+    review_day_counts,
+)
 from worktree_lifecycle_control.evidence import validate_integration_evidence
 
 
@@ -33,50 +42,60 @@ def test_parse_porcelain_z_preserves_lock_reason() -> None:
     ("kwargs", "expected"),
     [
         ({"exists": False}, "orphan_unknown"),
-        ({"dirty": True}, "protected_dirty"),
-        ({"unpushed": 2}, "protected_unpushed"),
-        ({"entry": {}}, "owner_unknown"),
+        ({"dirty": True}, "protected"),
+        ({"unpushed": 2}, "protected"),
+        ({"entry": {}}, "review_required"),
         (
             {"entry": {"owner": "codex", "lifecycle_status": "active"}},
             "active",
         ),
         (
             {"locked": True, "entry": {"owner": "codex"}},
-            "protected_locked",
+            "protected",
         ),
         (
             {
                 "entry": {
                     "owner": "codex",
+                    "task": "test",
+                    "return_path": "task:test",
+                    "lifecycle_status": "complete",
                     "integration": {
                         "status": "verified",
                         "provider": "github",
-                        "source": "github-pr:1",
-                        "head_sha": HEAD,
+                        "evidence_type": "github_pr_merged",
+                        "provider_record_id": "github-pr:1",
+                        "subject_head_sha": HEAD,
+                        "resulting_base_sha": "b" * 40,
                         "actor": "github-api",
-                        "observed_at": "2026-08-06T10:00:00+09:00",
+                        "observed_at": "2026-08-06T09:00:00+09:00",
                     },
                     "context_saved": False,
                 }
             },
-            "integrated_context_pending",
+            "review_required",
         ),
         (
             {
                 "entry": {
                     "owner": "codex",
+                    "task": "test",
+                    "return_path": "task:test",
+                    "lifecycle_status": "complete",
                     "integration": {
                         "status": "verified",
                         "provider": "github",
-                        "source": "github-pr:1",
-                        "head_sha": HEAD,
+                        "evidence_type": "github_pr_merged",
+                        "provider_record_id": "github-pr:1",
+                        "subject_head_sha": HEAD,
+                        "resulting_base_sha": "b" * 40,
                         "actor": "github-api",
-                        "observed_at": "2026-08-06T10:00:00+09:00",
+                        "observed_at": "2026-08-06T09:00:00+09:00",
                     },
                     "context_saved": True,
                 }
             },
-            "cleanup_ready",
+            "cleanup_candidate",
         ),
         (
             {
@@ -86,51 +105,128 @@ def test_parse_porcelain_z_preserves_lock_reason() -> None:
                     "integration": {"status": "unknown"},
                 }
             },
-            "review_due",
+            "review_required",
         ),
     ],
 )
-def test_classification_precedence(kwargs: dict, expected: str) -> None:
+def test_disposition(kwargs: dict, expected: str) -> None:
     defaults = {
         "exists": True,
         "dirty": False,
         "unpushed": 0,
         "locked": False,
         "head": HEAD,
-        "entry": {"owner": "codex"},
+        "entry": {
+            "owner": "codex",
+            "task": "test",
+            "return_path": "task:test",
+            "lifecycle_status": "complete",
+            "integration": {"status": "unknown"},
+            "context_saved": False,
+        },
         "now": NOW,
     }
     defaults.update(kwargs)
-    assert classify(**defaults)[0] == expected
+    assert assess_lifecycle(**defaults).disposition == expected
+
+
+def test_assessment_preserves_orthogonal_blockers() -> None:
+    result = assess_lifecycle(
+        exists=True,
+        dirty=True,
+        unpushed=2,
+        locked=True,
+        head=HEAD,
+        entry={},
+        now=NOW,
+    )
+    assert set(result.blockers) >= {
+        "dirty_worktree",
+        "unpushed_commits",
+        "owner_unknown",
+        "worktree_locked",
+        "integration_unverified",
+        "context_not_saved",
+    }
+    assert result.disposition == "protected"
 
 
 def test_naive_deadline_is_rejected() -> None:
-    with pytest.raises(ValueError, match="timezone"):
-        classify(
-            exists=True,
-            dirty=False,
-            unpushed=0,
-            locked=False,
-            entry={"owner": "codex", "expires_at": "2026-08-05T00:00:00"},
-            now=NOW,
-            head=HEAD,
-        )
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=0,
+        locked=False,
+        entry={"owner": "codex", "expires_at": "2026-08-05T00:00:00"},
+        now=NOW,
+        head=HEAD,
+    )
+    assert "registry_invalid" in result.blockers
+    assert "expires_at must include a timezone" in result.observations["registry_errors"]
+
+
+def test_calendar_day_delta_uses_report_timezone_dates() -> None:
+    report_now = datetime.fromisoformat("2026-08-06T00:05:00+09:00")
+    assert calendar_day_delta("2026-08-05T23:55:00+09:00", report_now) == 1
+    assert calendar_day_delta("2026-08-06T00:05:00+09:00", report_now) == 0
+    assert calendar_day_delta("2026-08-07T00:00:00+09:00", report_now) == -1
+
+
+def test_review_day_counts_never_uses_negative_remaining_days() -> None:
+    report_now = datetime.fromisoformat("2026-08-06T12:00:00+09:00")
+    assert review_day_counts("2026-08-08T00:00:00+09:00", report_now) == (2, 0)
+    assert review_day_counts("2026-08-06T00:00:00+09:00", report_now) == (0, 0)
+    assert review_day_counts("2026-08-03T00:00:00+09:00", report_now) == (0, 3)
+
+
+def test_human_day_summary_uses_clear_japanese_labels() -> None:
+    fields = {name: None for name in WorktreeRecord.__dataclass_fields__}
+    fields.update(
+        repo="C:/repo",
+        path="C:/repo/worktree",
+        git_locked=False,
+        prunable=False,
+        exists=True,
+        dirty=False,
+        unpushed_commits=0,
+        days_since_created=None,
+        days_since_head_commit=22,
+        expires_at="2026-08-03T00:00:00+09:00",
+        days_until_review=0,
+        overdue_days=3,
+        context_saved=False,
+        integration_evidence_valid=False,
+        integration_evidence_errors=(),
+        observations={},
+        blockers=("integration_unverified",),
+        review_signals=("review_deadline_reached",),
+        disposition="review_required",
+    )
+    record = WorktreeRecord(**fields)
+    assert human_day_summary(record) == (
+        "作成から: 不明（台帳未登録） / HEAD commitから: 22日 / 見直し: 期限を3日超過"
+    )
 
 
 def test_squash_or_rebase_evidence_must_match_exact_head() -> None:
     entry = {
         "owner": "codex",
+        "task": "test",
+        "return_path": "task:test",
+        "lifecycle_status": "complete",
         "integration": {
             "status": "verified",
             "provider": "github",
-            "source": "github-pr:123",
-            "head_sha": HEAD,
+            "evidence_type": "github_pr_merged",
+            "provider_record_id": "github-pr:123",
+            "subject_head_sha": HEAD,
+            "resulting_base_sha": "b" * 40,
             "actor": "github-api",
-            "observed_at": "2026-08-06T10:00:00+09:00",
+            "observed_at": "2026-08-06T09:00:00+09:00",
         },
         "context_saved": True,
     }
-    assert classify(
+    assert assess_lifecycle(
         exists=True,
         dirty=False,
         unpushed=3,
@@ -138,8 +234,8 @@ def test_squash_or_rebase_evidence_must_match_exact_head() -> None:
         head=HEAD,
         entry=entry,
         now=NOW,
-    )[0] == "cleanup_ready"
-    assert classify(
+    ).disposition == "cleanup_candidate"
+    assert assess_lifecycle(
         exists=True,
         dirty=False,
         unpushed=3,
@@ -147,7 +243,7 @@ def test_squash_or_rebase_evidence_must_match_exact_head() -> None:
         head="different",
         entry=entry,
         now=NOW,
-    )[0] == "protected_unpushed"
+    ).disposition == "protected"
 
 
 def test_report_path_writes_machine_readable_evidence(tmp_path, monkeypatch) -> None:
@@ -160,7 +256,8 @@ def test_report_path_writes_machine_readable_evidence(tmp_path, monkeypatch) -> 
     payload = __import__("json").loads(report.read_text(encoding="utf-8"))
     assert payload["action"] == "scan"
     assert payload["changed"] is False
-    assert payload["verified"] is True
+    assert payload["scan_completed"] is True
+    assert payload["measurement_status"] == "complete"
     assert payload["report_path"] == str(report.resolve())
 
 
@@ -168,17 +265,119 @@ def test_verified_evidence_requires_exact_head_and_provenance() -> None:
     valid = {
         "status": "verified",
         "provider": "github",
-        "source": "github-pr:123",
-        "head_sha": HEAD,
+        "evidence_type": "github_pr_merged",
+        "provider_record_id": "github-pr:123",
+        "subject_head_sha": HEAD,
+        "resulting_base_sha": "b" * 40,
         "actor": "github-api",
-        "observed_at": "2026-08-06T10:00:00+09:00",
+        "observed_at": "2026-08-06T09:00:00+09:00",
     }
-    assert validate_integration_evidence(valid, HEAD).verified is True
-    invalid = dict(valid, head_sha="b" * 40, observed_at="2026-08-06T10:00:00")
-    result = validate_integration_evidence(invalid, HEAD)
+    assert validate_integration_evidence(valid, HEAD, now=NOW).verified is True
+    invalid = dict(valid, subject_head_sha="b" * 40, observed_at="2026-08-06T10:00:00")
+    result = validate_integration_evidence(invalid, HEAD, now=NOW)
     assert result.verified is False
-    assert "head_sha does not match the scanned worktree HEAD" in result.errors
+    assert "subject_head_sha does not match the scanned worktree HEAD" in result.errors
     assert "observed_at must include a timezone" in result.errors
+
+
+def test_stale_or_unknown_actor_evidence_is_not_verified() -> None:
+    evidence = {
+        "status": "verified",
+        "provider": "github",
+        "evidence_type": "github_pr_merged",
+        "provider_record_id": "github-pr:123",
+        "subject_head_sha": HEAD,
+        "resulting_base_sha": "b" * 40,
+        "actor": "unknown",
+        "observed_at": "2026-07-01T10:00:00+00:00",
+    }
+    result = validate_integration_evidence(evidence, HEAD, now=NOW)
+    assert result.verified is False
+    assert "actor is required" in result.errors
+    assert "observed_at is stale" in result.errors
+
+
+def test_bad_registry_types_are_isolated_as_blockers() -> None:
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=0,
+        locked=False,
+        head=HEAD,
+        entry={
+            "owner": "codex",
+            "task": "test",
+            "return_path": "task:test",
+            "lifecycle_status": "complete",
+            "integration": "bad",
+            "context_saved": True,
+            "created_at": 123,
+        },
+        now=NOW,
+    )
+    assert "registry_invalid" in result.blockers
+    assert result.disposition == "review_required"
+
+
+def test_unhashable_lifecycle_is_isolated_as_blocker() -> None:
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=0,
+        locked=False,
+        head=HEAD,
+        entry={
+            "owner": "codex",
+            "task": "test",
+            "return_path": "task:test",
+            "lifecycle_status": {},
+            "integration": {"status": "unknown"},
+            "context_saved": False,
+        },
+        now=NOW,
+    )
+    assert "registry_invalid" in result.blockers
+
+
+def test_invalid_soft_budget_is_rejected(tmp_path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        '{"schema_version":"worktree-lifecycle/v1","soft_budget_per_repo":"3","entries":{}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="soft_budget_per_repo"):
+        load_registry(path)
+
+
+def test_primary_worktree_is_never_cleanup_candidate() -> None:
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=0,
+        locked=False,
+        head=HEAD,
+        entry={
+            "owner": "codex",
+            "task": "test",
+            "return_path": "task:test",
+            "lifecycle_status": "complete",
+            "integration": {
+                "status": "verified",
+                "provider": "github",
+                "evidence_type": "github_pr_merged",
+                "provider_record_id": "github-pr:123",
+                "subject_head_sha": HEAD,
+                "resulting_base_sha": "b" * 40,
+                "actor": "github-api",
+                "observed_at": "2026-08-06T10:00:00+00:00",
+            },
+            "context_saved": True,
+        },
+        now=NOW,
+        primary=True,
+    )
+    assert "primary_worktree" in result.blockers
+    assert result.disposition != "cleanup_candidate"
 
 
 def test_review_packet_never_executes_cleanup(tmp_path, monkeypatch) -> None:
@@ -191,3 +390,18 @@ def test_review_packet_never_executes_cleanup(tmp_path, monkeypatch) -> None:
     payload = __import__("json").loads(report.read_text(encoding="utf-8"))
     assert payload["executed"] is False
     assert payload["proposed_operations"] == []
+    assert payload["valid_until"] > payload["recorded_at"]
+
+
+def test_repos_are_deduplicated_by_git_common_dir(tmp_path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(
+        "worktree_lifecycle_control.cli.git_common_dir",
+        lambda repo: "c:/same/common-dir",
+    )
+    monkeypatch.setattr(
+        "worktree_lifecycle_control.cli.scan_repo",
+        lambda repo, registry, now: calls.append(repo) or [],
+    )
+    assert main(["scan", "--repo", str(tmp_path), "--repo", str(tmp_path / "linked")]) == 0
+    assert len(calls) == 1

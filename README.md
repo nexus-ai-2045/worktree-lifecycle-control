@@ -6,25 +6,23 @@ Git worktree を「増えたフォルダ」ではなく、所有者・タスク�
 
 ## 原則
 
-- 年齢は通知条件であり、削除条件にしない。
+- 経過日数は通知条件であり、削除条件にしない。
 - dirty、未到達commit、owner不明、統合不明を保護する。
 - worktree、branch、task、PRを別の対象として扱う。
-- `cleanup_ready` は削除ではなく、人間レビュー用候補を意味する。
+- `cleanup_candidate` は削除ではなく、人間レビュー用候補を意味する。
 - 通常フローでは `--force` を使わない。
 - Gitの機械可読形式 `git worktree list --porcelain -z` を使う。
 
-## 状態
+## 判定
 
-| 状態 | 意味 |
+危険条件は一つの状態へ潰さず、`blockers[]`へ同時に保持します。その上で、操作可否だけを`disposition`へ集約します。
+
+| disposition | 意味 |
 | --- | --- |
 | `active` | 台帳上で作業中 |
-| `protected_dirty` | trackedまたはuntracked差分あり |
-| `protected_unpushed` | remoteから到達不能なcommitあり |
-| `protected_locked` | Git worktreeがlock済み |
-| `owner_unknown` | 台帳にownerがない |
-| `review_due` | 期限超過または判断材料不足 |
-| `integrated_context_pending` | 統合済みだが引き継ぎ保存未完了 |
-| `cleanup_ready` | clean・remote到達済み・統合確認済み・context保存済み |
+| `protected` | dirty・未到達commit・lockなど、削除禁止条件あり |
+| `review_required` | owner・統合証拠・contextなどの確認が必要 |
+| `cleanup_candidate` | blockerなし。人間レビュー候補 |
 | `orphan_unknown` | path不在など実体不明 |
 
 ## 実行例
@@ -54,12 +52,14 @@ GitHub固有のadapterは、統合済み判定に次をすべて返す必要が�
 
 - `status: verified`
 - `provider`
-- 一次証拠を識別する`source`
-- scan対象と一致する40桁の`head_sha`
+- 証拠の意味を示す`evidence_type`
+- 一次証拠を識別する`provider_record_id`
+- scan対象と一致する40桁の`subject_head_sha`
+- 統合先を示す40桁の`resulting_base_sha`
 - `actor`
-- timezone付き`observed_at`
+- timezone付き`observed_at`（scan時点から7日以内）
 
-不足・SHA不一致の場合、`cleanup_ready`へ昇格しません。
+不足・SHA不一致・7日超過・未来時刻の場合、`cleanup_candidate`へ昇格しません。
 
 ## 台帳
 
@@ -74,4 +74,23 @@ GitHub固有のadapterは、統合済み判定に次をすべて返す必要が�
 - `integration.status`
 - `context_saved`
 
-期限超過だけで `cleanup_ready` にはなりません。
+期限超過だけで `cleanup_candidate` にはなりません。
+
+## 日数の表示
+
+「年齢」という曖昧な表現は使わず、次を別々に表示します。
+
+| JSON field | 日本語での意味 | 用途 |
+| --- | --- | --- |
+| `days_since_created` | 作成からの経過日数 | 長期化の通知 |
+| `days_since_head_commit` | HEAD commitのcommitter dateからの経過日数 | commit時点の古さの確認 |
+| `days_until_review` | 見直し期限までの残り日数 | review予定 |
+| `overdue_days` | 見直し期限の超過日数 | review優先度 |
+
+いずれもカレンダー日数として計算します。0日は「今日」、1日は「1日前／期限まで1日」です。期限を過ぎた場合は`days_until_review: 0`とし、超過分を`overdue_days`へ表示します。何日経過しても、日数だけではworktreeを削除しません。
+
+通常表示では次の形にまとめます。
+
+```text
+作成から: 不明（台帳未登録） / HEAD commitから: 22日 / 見直し: 未設定
+```

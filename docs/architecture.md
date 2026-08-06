@@ -20,7 +20,8 @@ GitHub API / gh
 
 - `git worktree list --porcelain -z`の解析
 - dirty、未到達commit、lock、path不在の観測
-- owner、task、期限、return pathの台帳
+- owner、task、作成日時、見直し期限、return pathの台帳
+- 作成からの経過日数、最終commitからの経過日数、期限までの残り日数、期限超過日数の表示
 - cleanup readinessのfail-closed判定
 - 削除を行わない人間レビューpacket
 
@@ -37,14 +38,18 @@ Coreへ渡す`integration`は次を必須とします。
 {
   "status": "verified",
   "provider": "github",
-  "source": "github-pr:123",
-  "head_sha": "0123456789abcdef0123456789abcdef01234567",
+  "evidence_type": "github_pr_merged",
+  "provider_record_id": "github-pr:123",
+  "subject_head_sha": "0123456789abcdef0123456789abcdef01234567",
+  "resulting_base_sha": "89abcdef0123456789abcdef0123456789abcdef",
   "actor": "github-api",
   "observed_at": "2026-08-06T10:00:00+09:00"
 }
 ```
 
-scan対象のHEADと`head_sha`が一致しない場合、統合済みへ昇格しません。squash/rebaseで元commitがbaseから到達不能でも、exact headに結び付いた一次証拠がある場合だけcleanup判定へ進めます。
+scan対象のHEADと`subject_head_sha`が一致しない場合、統合済みへ昇格しません。squash/rebaseで元commitがbaseから到達不能でも、exact headと統合先SHAに結び付いた一次証拠がある場合だけcleanup判定へ進めます。
+
+証拠はscan時点から7日以内だけ有効とし、未来時刻、`unknown` provider/actor、型不正はentry単位のblockerとして隔離します。
 
 ## 削除境界
 
@@ -57,4 +62,3 @@ scan対象のHEADと`head_sha`が一致しない場合、統合済みへ昇格�
 5. 定期実行・hook・Projects全体配線
 
 このMVPは、いずれも実行しません。
-

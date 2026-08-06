@@ -12,8 +12,10 @@
       "integration": {
         "status": "unknown",
         "provider": "unknown",
-        "source": "unknown",
-        "head_sha": "unknown",
+        "evidence_type": "unknown",
+        "provider_record_id": "unknown",
+        "subject_head_sha": "unknown",
+        "resulting_base_sha": "unknown",
         "actor": "unknown",
         "observed_at": "unknown"
       },
