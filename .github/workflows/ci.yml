@@ -3,6 +3,13 @@ name: CI
 on:
   pull_request:
   push:
+  # 時限爆弾は「変更で発火するテスト」では捕まらない。リポジトリが静かなほど
+  # 腐敗が緑のまま隠れる。2026-08-13 に発火した now= 未固定のテストが、CI が
+  # 8/6 以降起動していなかったため 2 日間 気付かれなかった実例がある。
+  # 時間で起動する経路を置き、無変更でも腐敗を検出する。
+  schedule:
+    - cron: "17 21 * * 1"  # 毎週月曜 21:17 UTC (= 火曜 06:17 JST)
+  workflow_dispatch:
 
 permissions:
   contents: read

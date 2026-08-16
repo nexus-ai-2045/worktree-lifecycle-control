@@ -439,12 +439,49 @@ def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
     assert evidence["resulting_base_sha"] == "32e999b4e611d2ad99d95442c53d760a196e2571"
     assert evidence["actor"] == "nexus-ai-2045"
     assert evidence["observed_at"] == "2026-08-06T07:39:04Z"
+    # observed_at (2026-08-06T07:39:04Z) より後の固定時刻。NOW は同日 00:00 なので
+    # そのまま渡すと「未来の観測」と判定される。実時刻に依存させないことが目的。
     validation = validate_integration_evidence(
         evidence,
         "931ce10e9dcd1e7e44a1980fc279c10db28aae94",
+        now=datetime(2026, 8, 6, 12, tzinfo=timezone.utc),
     )
     assert validation.verified is True
     assert validation.errors == ()
+
+
+@pytest.mark.xfail(
+    reason=(
+        "closeout_adapter は observed_at に mergedAt を転記する。"
+        "observed_at は「いつ観測したか」であって「いつ merge されたか」ではないため、"
+        "7 日より前に merge された PR は、今この瞬間に観測し直しても永久に stale と判定される。"
+        "収集時刻を入れるよう直したら xpass するので、その時点で xfail を外す。"
+    ),
+    strict=True,
+)
+def test_evidence_observed_at_is_collection_time_not_merge_time() -> None:
+    """観測時刻と merge 時刻の取り違えを機械可読に固定する (未修正の既知欠陥)."""
+    merged_long_ago = "2026-01-01T00:00:00Z"
+    payload = {
+        "pr_state": {
+            "number": 1,
+            "state": "MERGED",
+            "mergedAt": merged_long_ago,
+            "headRefOid": "9" * 40,
+            "mergeCommit": {"oid": "3" * 40},
+            "mergedBy": {"login": "nexus-ai-2045"},
+        },
+        "account_context": {
+            "checks": {"active_api_login": {"status": "ok", "value": "nexus-ai-2045"}}
+        },
+    }
+    evidence = evidence_from_closeout_collect(payload)
+
+    # 遠い過去の merge でも、今収集したなら観測時刻は「今」であるべき
+    assert evidence["observed_at"] != merged_long_ago
+
+    validation = validate_integration_evidence(evidence, "9" * 40, now=NOW)
+    assert validation.verified is True
 
 
 def test_evidence_from_closeout_collect_rejects_open_pr() -> None:
