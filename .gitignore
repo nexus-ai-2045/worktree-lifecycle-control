@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+# CONTRIBUTING が案内する --basetemp の出力先。Windows では既定の temp が
+# パス長 260 制限に当たるため repo 内に置く運用になっており、追跡外にする。
+.pytest-tmp/
 .venv/
 .local/
 dist/

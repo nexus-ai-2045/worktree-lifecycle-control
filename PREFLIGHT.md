@@ -1,3 +1,5 @@
+<!-- repo-preflight:review-record -->
+
 # 公開範囲とレビュー状態
 
 このリポジトリは、Git worktree のライフサイクルを read-only で棚卸しし、cleanup readiness を fail-closed に判定するローカル制御ツールです。
@@ -26,7 +28,7 @@
 
 CI green や `readiness_scan` の部分 pass は、公開してよいことを保証しません。public にする前に次をすべて満たす必要があります。
 
-1. README / LICENSE / SECURITY / CONTRIBUTING / PUBLIC_READY の人間レビュー
+1. README / LICENSE / SECURITY / CONTRIBUTING / PREFLIGHT の人間レビュー
 2. secret scan と personal path scan の再測定
 3. dependency audit と現行 CI 結果の再確認
 4. repository visibility 変更の対象指定と現在会話での明示承認
