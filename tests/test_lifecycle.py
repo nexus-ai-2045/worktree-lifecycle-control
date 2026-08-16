@@ -460,14 +460,26 @@ def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
     strict=True,
 )
 def test_evidence_observed_at_is_collection_time_not_merge_time() -> None:
-    """観測時刻と merge 時刻の取り違えを機械可読に固定する (未修正の既知欠陥)."""
+    """観測時刻と merge 時刻の取り違えを機械可読に固定する (未修正の既知欠陥).
+
+    xpass 可能であることが必須なので、次の 2 点を避けている。
+
+    - subject SHA は `commits` で渡す。adapter は `headRefOid` を読まないため、
+      それだけでは CloseoutAdapterError で落ち、欠陥と無関係な理由で永久に
+      xfail してしまう。
+    - 鮮度の基準時刻は adapter が出した `observed_at` 自身から作る。修正後の
+      `observed_at` は収集時刻 (実時刻) になるので、固定の NOW と比べると
+      今度は「未来の観測」で落ちる。絶対時刻ではなく「mergedAt を転記して
+      いるか」だけを問う形にする。
+    """
     merged_long_ago = "2026-01-01T00:00:00Z"
+    subject = "9" * 40
     payload = {
         "pr_state": {
             "number": 1,
             "state": "MERGED",
             "mergedAt": merged_long_ago,
-            "headRefOid": "9" * 40,
+            "commits": [{"oid": subject}],
             "mergeCommit": {"oid": "3" * 40},
             "mergedBy": {"login": "nexus-ai-2045"},
         },
@@ -480,7 +492,9 @@ def test_evidence_observed_at_is_collection_time_not_merge_time() -> None:
     # 遠い過去の merge でも、今収集したなら観測時刻は「今」であるべき
     assert evidence["observed_at"] != merged_long_ago
 
-    validation = validate_integration_evidence(evidence, "9" * 40, now=NOW)
+    # 収集時刻を基準に検証する (絶対時刻に依存させない)
+    collected = datetime.fromisoformat(evidence["observed_at"].replace("Z", "+00:00"))
+    validation = validate_integration_evidence(evidence, subject, now=collected)
     assert validation.verified is True
 
 
