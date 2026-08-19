@@ -3,16 +3,71 @@
   "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/integration-evidence-v2.schema.json",
   "title": "Worktree integration evidence v2",
   "type": "object",
-  "required": ["status", "provider", "evidence_type", "provider_record_id", "subject_head_sha", "resulting_base_sha", "actor", "observed_at"],
+  "required": [
+    "status",
+    "provider",
+    "evidence_type",
+    "provider_record_id",
+    "subject_head_sha",
+    "resulting_base_sha",
+    "actor",
+    "observed_at"
+  ],
   "properties": {
-    "status": {"const": "verified"},
-    "provider": {"type": "string", "minLength": 1, "not": {"const": "unknown"}},
-    "evidence_type": {"enum": ["github_pr_merged", "git_reachability"]},
-    "provider_record_id": {"type": "string", "minLength": 1, "not": {"const": "unknown"}},
-    "subject_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "resulting_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "actor": {"type": "string", "minLength": 1, "not": {"const": "unknown"}},
-    "observed_at": {"type": "string", "format": "date-time"}
+    "status": {
+      "const": "verified"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "const": "unknown"
+      }
+    },
+    "evidence_type": {
+      "enum": [
+        "github_pr_merged"
+      ],
+      "description": "git から導出できない事実だけを宣言できる。到達性 (旧 git_reachability) は scan の度に導出するため宣言対象から外した。"
+    },
+    "provider_record_id": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "const": "unknown"
+      }
+    },
+    "subject_head_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "resulting_base_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "actor": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "const": "unknown"
+      },
+      "description": "統合を実行した主体。収集した主体ではない。"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "いつ観測したか。merge 時刻ではない。鮮度窓はこの値で判定する。"
+    },
+    "subject_merged_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "いつ merge されたか。鮮度判定には使わない。"
+    },
+    "observed_by": {
+      "type": "string",
+      "minLength": 1,
+      "description": "収集を実行した主体。actor と別の事実として持つ。"
+    }
   },
   "additionalProperties": false
 }

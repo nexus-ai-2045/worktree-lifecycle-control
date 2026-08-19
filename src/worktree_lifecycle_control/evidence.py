@@ -8,6 +8,15 @@ from typing import Any
 
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
+SUPPORTED_EVIDENCE_TYPES = frozenset({"github_pr_merged"})
+"""台帳に宣言できる証跡の種類。
+
+`git_reachability` は v2 まで受理していたが、これを生成する経路も検証する実装も
+存在せず、宣言するだけで通る空欄だった。到達性は git から毎回導出できる事実なので、
+宣言させるのではなく scan の度に導出する (reachability.head_reachability)。
+導出できる事実を宣言に持たせると、宣言と実体が離れた瞬間から嘘になる。
+"""
+
 
 @dataclass(frozen=True)
 class EvidenceValidation:
@@ -22,7 +31,12 @@ def validate_integration_evidence(
     now: datetime | None = None,
     max_age: timedelta = timedelta(days=7),
 ) -> EvidenceValidation:
-    """Validate provider evidence without calling GitHub or another remote service."""
+    """外部サービスを呼ばずに、宣言された統合証跡を検証する。
+
+    ここで検証するのは「git から導出できないこと」だけである。GitHub 上で PR が
+    merge されたか否かはローカル git には無い事実なので、宣言と鮮度を見る。
+    到達性のように git から導出できる事実は、宣言ではなく導出側で扱う。
+    """
     if integration.get("status") != "verified":
         return EvidenceValidation(False, ())
 
@@ -37,7 +51,7 @@ def validate_integration_evidence(
 
     if not isinstance(provider, str) or not provider.strip() or provider == "unknown":
         errors.append("provider is required")
-    if evidence_type not in {"github_pr_merged", "git_reachability"}:
+    if evidence_type not in SUPPORTED_EVIDENCE_TYPES:
         errors.append("evidence_type is unsupported")
     if not isinstance(provider_record_id, str) or provider_record_id in ("", "unknown"):
         errors.append("provider_record_id is required")

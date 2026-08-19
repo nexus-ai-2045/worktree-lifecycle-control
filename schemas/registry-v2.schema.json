@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/registry-v2.schema.json",
+  "title": "Worktree lifecycle registry v2",
+  "description": "人の意思だけを書く保護リスト。git から導出できる事実は書かない。全項目が任意で、台帳そのものも任意である。",
+  "type": "object",
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": {"const": "worktree-lifecycle/v2"},
+    "soft_budget_per_repo": {"type": "integer", "minimum": 1},
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "description": "worktree の絶対パスをキーにする。書いた項目だけが効く。",
+        "properties": {
+          "pin": {"type": "boolean", "description": "true なら削除候補に出さない。git から導出できない唯一の保護条件。"},
+          "reason": {"type": "string", "minLength": 1, "description": "pin する理由。将来の自分と他セッションのために書く。"},
+          "expires_at": {"type": "string", "format": "date-time", "description": "見直し期限。通知条件であり削除条件ではない。"},
+          "return_path": {"type": "string", "minLength": 1, "description": "作業を再開する時に戻る場所。"},
+          "lifecycle_status": {"enum": ["active", "paused", "complete", "unknown"]},
+          "note": {"type": "string", "minLength": 1},
+          "owner": {"type": "string", "minLength": 1, "description": "任意。未記入なら HEAD commit の author から導出する。"},
+          "task": {"type": "string", "minLength": 1, "description": "任意。未記入なら branch 名から導出する。"},
+          "created_at": {"type": "string", "format": "date-time"},
+          "context_saved": {"type": "boolean"},
+          "integration": {
+            "oneOf": [
+              {"$ref": "integration-evidence-v2.schema.json"},
+              {
+                "type": "object",
+                "required": ["status"],
+                "properties": {"status": {"const": "unknown"}},
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
