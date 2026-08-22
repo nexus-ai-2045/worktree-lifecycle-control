@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
+from .evidence import parse_rfc3339
+
 GH_TIMEOUT_SECONDS = 30
 """gh 呼び出しの上限。応答しない gh を無期限に待つと収集全体が止まる。"""
 
@@ -182,11 +184,9 @@ def evidence_from_closeout_collect(
     if not isinstance(merged_at, str) or not merged_at.strip():
         raise CloseoutAdapterError("pr_state.mergedAt is required")
     try:
-        parsed_merged_at = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+        parse_rfc3339(merged_at, field="pr_state.mergedAt")
     except ValueError as error:
-        raise CloseoutAdapterError("pr_state.mergedAt must be RFC3339-compatible") from error
-    if parsed_merged_at.tzinfo is None:
-        raise CloseoutAdapterError("pr_state.mergedAt must include a timezone")
+        raise CloseoutAdapterError(str(error)) from error
 
     collection_time = now
     if collection_time is None:
@@ -196,13 +196,11 @@ def evidence_from_closeout_collect(
                 "closeout collection timestamp is required (observed_at or collected_at)"
             )
         try:
-            collection_time = datetime.fromisoformat(raw_collection_time.replace("Z", "+00:00"))
+            collection_time = parse_rfc3339(
+                raw_collection_time, field="closeout collection timestamp"
+            )
         except ValueError as error:
-            raise CloseoutAdapterError(
-                "closeout collection timestamp must be RFC3339-compatible"
-            ) from error
-        if collection_time.tzinfo is None:
-            raise CloseoutAdapterError("closeout collection timestamp must include a timezone")
+            raise CloseoutAdapterError(str(error)) from error
 
     explicit = subject_head_sha
     if explicit is None and isinstance(payload.get("subject_head_sha"), str):

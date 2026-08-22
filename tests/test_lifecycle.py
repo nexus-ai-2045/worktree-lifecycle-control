@@ -13,6 +13,7 @@ from worktree_lifecycle_control.cli import (
     load_registry,
     parse_porcelain_z,
     classify_ignored_paths,
+    RegistryError,
     review_day_counts,
     registry_entry_for_path,
 )
@@ -121,6 +122,41 @@ def test_unknown_registry_field_does_not_bypass_pin_validation() -> None:
     )
     assert "unknown integration field: verifed" in nested.observations["registry_errors"]
     assert nested.disposition == "review_required"
+
+
+def test_malformed_registry_entry_fails_closed(tmp_path) -> None:
+    path = tmp_path / "registry.json"
+    path.write_text(
+        '{"schema_version":"worktree-lifecycle/v2","entries":{"C:/repo":null}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RegistryError, match="must be an object"):
+        load_registry(path)
+
+
+def test_posix_backslash_is_not_an_ignored_path_separator(monkeypatch) -> None:
+    monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "linux")
+    allowed, unknown = classify_ignored_paths([r"private\.venv\secret"])
+    assert allowed == ()
+    assert unknown == (r"private\.venv\secret",)
+
+
+def test_failed_ignored_measurement_is_a_measurement_unknown() -> None:
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={}, now=NOW, reachable=True, ignored_measurement_failed=True,
+    )
+    assert "ignored_content_measurement_unknown" in result.blockers
+    assert result.disposition == "protected"
+
+
+def test_invalid_integration_status_requires_review() -> None:
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={"integration": {"status": "verifed"}}, now=NOW, reachable=True,
+    )
+    assert "registry_invalid" in result.review_signals
+    assert result.disposition == "review_required"
 
 
 def test_macos_registry_matching_uses_filesystem_identity(monkeypatch) -> None:

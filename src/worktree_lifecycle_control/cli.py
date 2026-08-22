@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from .closeout_adapter import CloseoutAdapterError, evidence_from_closeout_collect
-from .evidence import validate_integration_evidence
+from .evidence import validate_integration_evidence, validate_integration_shape
 from .reachability import (
     branch_integration,
     head_reachability,
@@ -146,7 +146,12 @@ SCAN_SCHEMA_VERSION = "worktree-lifecycle-report/v3"
 REVIEW_SCHEMA_VERSION = "worktree-lifecycle-review/v3"
 
 MEASUREMENT_UNKNOWN_BLOCKERS = frozenset(
-    {"path_missing", "git_status_unknown", "head_reachability_unknown"}
+    {
+        "path_missing",
+        "git_status_unknown",
+        "head_reachability_unknown",
+        "ignored_content_measurement_unknown",
+    }
 )
 """判定に効く事実を測れなかった blocker。台帳の記入漏れはここに含めない。"""
 
@@ -196,6 +201,15 @@ def load_registry(path: Path | None) -> dict[str, Any]:
         )
     if not isinstance(payload.get("entries"), dict):
         raise RegistryError("registry entries must be an object")
+    malformed_entries = [
+        str(path)
+        for path, entry in payload["entries"].items()
+        if not isinstance(entry, dict)
+    ]
+    if malformed_entries:
+        raise RegistryError(
+            f"registry entry must be an object: {malformed_entries[0]}"
+        )
     unknown_fields = sorted(set(payload) - REGISTRY_FIELDS)
     if unknown_fields:
         raise RegistryError(f"unknown registry field: {unknown_fields[0]}")
@@ -239,6 +253,7 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
         errors.extend(
             f"unknown integration field: {field}" for field in unknown_integration
         )
+        errors.extend(validate_integration_shape(integration))
     for stamp_field in ("created_at", "expires_at"):
         if stamp_field not in entry:
             continue
@@ -304,14 +319,19 @@ def is_dirty(path: Path) -> bool | None:
 
 def ignored_paths(path: Path) -> tuple[str, ...] | None:
     proc = run_git(
-        path, "status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"
+        path,
+        "status",
+        "--porcelain=v1",
+        "--ignored=matching",
+        "--untracked-files=all",
+        "-z",
     )
     if proc.returncode != 0:
         return None
-    result = []
-    for line in proc.stdout.decode("utf-8", errors="surrogateescape").splitlines():
-        if line.startswith("!! "):
-            result.append(line[3:].strip('"'))
+    result: list[str] = []
+    for token in proc.stdout.split(b"\0"):
+        if token.startswith(b"!! "):
+            result.append(token[3:].decode("utf-8", errors="surrogateescape"))
     return tuple(result)
 
 
@@ -319,7 +339,10 @@ def classify_ignored_paths(paths: Sequence[str]) -> tuple[tuple[str, ...], tuple
     allowed: list[str] = []
     unknown: list[str] = []
     for path in paths:
-        parts = tuple(part for part in path.replace("\\", "/").strip("/").split("/") if part)
+        path_for_parts = path.replace("\\", "/") if sys.platform == "win32" else path
+        parts = tuple(
+            part for part in path_for_parts.strip("/").split("/") if part
+        )
         regeneratable = any(
             part in REGENERATABLE_IGNORED_PARTS or part.endswith(".egg-info") for part in parts
         )
@@ -406,6 +429,7 @@ def assess_lifecycle(
     integration_state: str = "unknown",
     detached: bool = False,
     unknown_ignored_paths: Sequence[str] = (),
+    ignored_measurement_failed: bool = False,
 ) -> LifecycleAssessment:
     """worktree 1 件を評価する。
 
@@ -447,6 +471,7 @@ def assess_lifecycle(
         "registered": bool(entry),
         "primary_worktree": primary,
         "unknown_ignored_paths": list(unknown_ignored_paths),
+        "ignored_measurement_failed": ignored_measurement_failed,
     }
 
     blockers: list[str] = []
@@ -478,6 +503,8 @@ def assess_lifecycle(
         blockers.append("pinned")
     if unknown_ignored_paths:
         blockers.append("unknown_ignored_content")
+    if ignored_measurement_failed:
+        blockers.append("ignored_content_measurement_unknown")
 
     # --- signal: 判断材料。削除を止めない -----------------------------------
     if detached:
@@ -505,6 +532,8 @@ def assess_lifecycle(
         signals.append("review_deadline_reached")
     if unknown_ignored_paths:
         signals.append("unknown_ignored_content")
+    if ignored_measurement_failed:
+        signals.append("ignored_content_measurement_unknown")
 
     if "path_missing" in blockers or "git_status_unknown" in blockers:
         disposition = "orphan_unknown"
@@ -563,6 +592,7 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             integration_state=integration_state,
             detached=detached,
             unknown_ignored_paths=(ignored_unknown if ignored is not None else ("<measurement-failed>",)),
+            ignored_measurement_failed=ignored is None and exists,
         )
         assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
         integration_value = entry.get("integration")
@@ -694,7 +724,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (OSError, json.JSONDecodeError, CloseoutAdapterError) as exc:
             emit(f"error: {exc}")
             return 2
-        rendered = json.dumps(evidence, ensure_ascii=False, indent=2)
+        rendered = json.dumps(evidence, ensure_ascii=True, indent=2)
         if args.output is not None:
             write_json_atomic(args.output, rendered)
         if args.json or args.output is None:
@@ -819,7 +849,7 @@ def run_inventory(args: argparse.Namespace) -> int:
         }
     else:
         payload = scan_payload
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    rendered = json.dumps(payload, ensure_ascii=True, indent=2)
     if args.report_path:
         write_json_atomic(args.report_path, rendered)
     if args.json:
