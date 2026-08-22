@@ -48,6 +48,7 @@ def validate_integration_evidence(
     resulting_base_sha = integration.get("resulting_base_sha")
     actor = integration.get("actor")
     observed_at = integration.get("observed_at")
+    subject_merged_at = integration.get("subject_merged_at")
 
     if not isinstance(provider, str) or not provider.strip() or provider == "unknown":
         errors.append("provider is required")
@@ -78,4 +79,13 @@ def validate_integration_evidence(
                     errors.append("observed_at is in the future")
         except ValueError:
             errors.append("observed_at must be RFC3339-compatible")
+    if not isinstance(subject_merged_at, str):
+        errors.append("subject_merged_at is required")
+    else:
+        try:
+            parsed_merged_at = datetime.fromisoformat(subject_merged_at.replace("Z", "+00:00"))
+            if parsed_merged_at.tzinfo is None:
+                errors.append("subject_merged_at must include a timezone")
+        except ValueError:
+            errors.append("subject_merged_at must be RFC3339-compatible")
     return EvidenceValidation(not errors, tuple(errors))

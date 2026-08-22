@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -131,8 +131,8 @@ def _resolve_actor(
     を要求しており `mergedBy` を含まない。上流が返すまでは --actor で明示する。
     """
     for candidate in (
-        explicit,
         (pr_state.get("mergedBy") or {}).get("login") if isinstance(pr_state.get("mergedBy"), dict) else None,
+        explicit,
         payload.get("actor"),
     ):
         resolved = _valid_actor(candidate)
@@ -152,7 +152,7 @@ def evidence_from_closeout_collect(
     now: datetime | None = None,
     actor: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize post_merge_closeout_report collect JSON into integration-evidence-v2.
+    """Normalize post_merge_closeout_report collect JSON into integration-evidence-v3.
 
     This adapter does not reimplement closeout collection. Collection remains
     shared/scripts/post_merge_closeout_report.py collect.
@@ -181,6 +181,28 @@ def evidence_from_closeout_collect(
     merged_at = pr_state.get("mergedAt")
     if not isinstance(merged_at, str) or not merged_at.strip():
         raise CloseoutAdapterError("pr_state.mergedAt is required")
+    try:
+        parsed_merged_at = datetime.fromisoformat(merged_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise CloseoutAdapterError("pr_state.mergedAt must be RFC3339-compatible") from error
+    if parsed_merged_at.tzinfo is None:
+        raise CloseoutAdapterError("pr_state.mergedAt must include a timezone")
+
+    collection_time = now
+    if collection_time is None:
+        raw_collection_time = payload.get("observed_at") or payload.get("collected_at")
+        if not isinstance(raw_collection_time, str) or not raw_collection_time.strip():
+            raise CloseoutAdapterError(
+                "closeout collection timestamp is required (observed_at or collected_at)"
+            )
+        try:
+            collection_time = datetime.fromisoformat(raw_collection_time.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise CloseoutAdapterError(
+                "closeout collection timestamp must be RFC3339-compatible"
+            ) from error
+        if collection_time.tzinfo is None:
+            raise CloseoutAdapterError("closeout collection timestamp must include a timezone")
 
     explicit = subject_head_sha
     if explicit is None and isinstance(payload.get("subject_head_sha"), str):
@@ -209,7 +231,7 @@ def evidence_from_closeout_collect(
         # observed_at は「いつ観測したか」。merge 時刻ではない。両者を混ぜると、
         # 鮮度窓 (既定 7 日) を過ぎて merge された PR は、今この瞬間に観測し直しても
         # 永久に stale と判定され、統合済みの worktree が二度と候補にならない。
-        "observed_at": (now or datetime.now(timezone.utc)).isoformat().replace("+00:00", "Z"),
+        "observed_at": collection_time.isoformat().replace("+00:00", "Z"),
         "subject_merged_at": merged_at,
         **({"observed_by": observed_by} if observed_by else {}),
     }

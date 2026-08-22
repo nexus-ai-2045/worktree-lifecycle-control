@@ -2,7 +2,7 @@
 
 - 状態: 採択
 - 日付: 2026-08-20
-- 影響: `worktree-lifecycle-report/v2` → `v3`、`worktree-lifecycle-review/v2` → `v3`、`worktree-lifecycle/v1` → `v2`
+- 影響: `worktree-lifecycle-report/v2` → `v3`、`worktree-lifecycle-review/v2` → `v3`、`worktree-lifecycle/v1` → `v2`、`integration-evidence/v2` → `v3`
 
 ## 背景
 
@@ -68,6 +68,7 @@ git が守るものを二重に守らない。git が守らないものだけを
 - 到達可能性の根に、worktree 削除で一緒に消えるもの (worktree 専用 reflog、他 worktree の detached HEAD) を数えない。
 - 台帳から導出できる事実と git から導出できる事実を、同じ項目に載せない。
 - 測定できなかったことを「安全」と言わない (`None` は blocker)。
+- ignored content は `.pytest_cache` / `__pycache__` / `.venv` の明示 allowlist だけを再生成可能とみなし、それ以外は `unknown_ignored_content` として保護する。
 
 ## Detector
 

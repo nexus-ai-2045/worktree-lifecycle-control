@@ -12,7 +12,9 @@ from worktree_lifecycle_control.cli import (
     main,
     load_registry,
     parse_porcelain_z,
+    classify_ignored_paths,
     review_day_counts,
+    registry_entry_for_path,
 )
 from worktree_lifecycle_control.evidence import validate_integration_evidence
 
@@ -101,6 +103,46 @@ def test_null_registry_field_does_not_bypass_validation() -> None:
     assert "task must be a non-empty string" in result.observations["registry_errors"]
     assert "return_path must be a non-empty string" in result.observations["registry_errors"]
     assert result.disposition == "review_required"
+
+
+def test_unknown_registry_field_does_not_bypass_pin_validation() -> None:
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={"pni": True}, now=NOW, reachable=True,
+    )
+    assert "unknown registry field: pni" in result.observations["registry_errors"]
+    assert "registry_invalid" in result.review_signals
+    assert result.disposition == "review_required"
+
+    nested = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={"integration": {"status": "unknown", "verifed": True}},
+        now=NOW, reachable=True,
+    )
+    assert "unknown integration field: verifed" in nested.observations["registry_errors"]
+    assert nested.disposition == "review_required"
+
+
+def test_macos_registry_matching_uses_filesystem_identity(monkeypatch) -> None:
+    registry = {"entries": {"/Users/Yas/Work": {"pin": True}}}
+    monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "darwin")
+    monkeypatch.setattr("worktree_lifecycle_control.cli.os.path.samefile", lambda a, b: True)
+    assert registry_entry_for_path(registry, "/users/yas/work") == {"pin": True}
+
+
+def test_unknown_ignored_content_is_protected_but_known_cache_is_not() -> None:
+    allowed, unknown = classify_ignored_paths([
+        ".pytest_cache/", "src/pkg/__pycache__/module.pyc", "src/pkg.egg-info/", "private-notes.txt"
+    ])
+    assert allowed == (".pytest_cache/", "src/pkg/__pycache__/module.pyc", "src/pkg.egg-info/")
+    assert unknown == ("private-notes.txt",)
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={}, now=NOW, reachable=True, unknown_ignored_paths=unknown,
+    )
+    assert "unknown_ignored_content" in result.blockers
+    assert "unknown_ignored_content" in result.review_signals
+    assert result.disposition == "protected"
 
 
 def test_unreachable_head_is_the_only_blocker_git_does_not_enforce() -> None:
@@ -228,6 +270,7 @@ def test_evidence_head_mismatch_surfaces_as_signal_not_blocker() -> None:
             "resulting_base_sha": "b" * 40,
             "actor": "github-api",
             "observed_at": "2026-08-06T09:00:00+09:00",
+            "subject_merged_at": "2026-08-06T08:00:00+09:00",
         },
         "context_saved": True,
     }
@@ -256,6 +299,21 @@ def test_report_path_writes_machine_readable_evidence(tmp_path, monkeypatch) -> 
     assert payload["report_path"] == str(report.resolve())
 
 
+def test_registry_validation_status_uses_review_signal(tmp_path, monkeypatch) -> None:
+    fields = {name: None for name in WorktreeRecord.__dataclass_fields__}
+    fields.update(
+        repo=str(tmp_path.resolve()), path=str(tmp_path), blockers=(),
+        review_signals=("registry_invalid",), observations={}, disposition="review_required",
+        git_locked=False, prunable=False, exists=True, context_saved=False,
+        integration_evidence_valid=False, integration_evidence_errors=(), overdue_days=0,
+    )
+    monkeypatch.setattr("worktree_lifecycle_control.cli.scan_repo", lambda *args: [WorktreeRecord(**fields)])
+    report = tmp_path / "scan.json"
+    assert main(["scan", "--repo", str(tmp_path), "--report-path", str(report)]) == 0
+    payload = __import__("json").loads(report.read_text(encoding="utf-8"))
+    assert payload["registry_validation_status"] == "partial"
+
+
 def test_verified_evidence_requires_exact_head_and_provenance() -> None:
     valid = {
         "status": "verified",
@@ -266,6 +324,7 @@ def test_verified_evidence_requires_exact_head_and_provenance() -> None:
         "resulting_base_sha": "b" * 40,
         "actor": "github-api",
         "observed_at": "2026-08-06T09:00:00+09:00",
+        "subject_merged_at": "2026-08-06T08:00:00+09:00",
     }
     assert validate_integration_evidence(valid, HEAD, now=NOW).verified is True
     invalid = dict(valid, subject_head_sha="b" * 40, observed_at="2026-08-06T10:00:00")
@@ -285,6 +344,7 @@ def test_stale_or_unknown_actor_evidence_is_not_verified() -> None:
         "resulting_base_sha": "b" * 40,
         "actor": "unknown",
         "observed_at": "2026-07-01T10:00:00+00:00",
+        "subject_merged_at": "2026-07-01T09:00:00+00:00",
     }
     result = validate_integration_evidence(evidence, HEAD, now=NOW)
     assert result.verified is False
@@ -367,6 +427,7 @@ def test_primary_worktree_is_never_cleanup_candidate() -> None:
                 "resulting_base_sha": "b" * 40,
                 "actor": "github-api",
                 "observed_at": "2026-08-06T10:00:00+00:00",
+                "subject_merged_at": "2026-08-06T09:00:00+00:00",
             },
             "context_saved": True,
         },
@@ -414,6 +475,7 @@ from worktree_lifecycle_control.evidence import validate_integration_evidence
 def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
     payload = {
         "decision": "pass",
+        "observed_at": "2026-08-06T08:00:00Z",
         "pr_state": {
             "number": 1,
             "state": "MERGED",
@@ -441,7 +503,7 @@ def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
     assert evidence["observed_by"] == "nexus-ai-2045"
     # merge 時刻は鮮度判定に使わない別項目へ
     assert evidence["subject_merged_at"] == "2026-08-06T07:39:04Z"
-    assert evidence["observed_at"] != "2026-08-06T07:39:04Z"
+    assert evidence["observed_at"] == "2026-08-06T08:00:00Z"
     # 鮮度の基準は収集時刻。絶対時刻に依存させない。
     collected = datetime.fromisoformat(evidence["observed_at"].replace("Z", "+00:00"))
     validation = validate_integration_evidence(
@@ -472,6 +534,7 @@ def test_evidence_observed_at_is_collection_time_not_merge_time() -> None:
     merged_long_ago = "2026-01-01T00:00:00Z"
     subject = "9" * 40
     payload = {
+        "observed_at": "2026-08-06T08:00:00Z",
         "pr_state": {
             "number": 1,
             "state": "MERGED",
@@ -493,6 +556,33 @@ def test_evidence_observed_at_is_collection_time_not_merge_time() -> None:
     collected = datetime.fromisoformat(evidence["observed_at"].replace("Z", "+00:00"))
     validation = validate_integration_evidence(evidence, subject, now=collected)
     assert validation.verified is True
+
+
+def test_closeout_requires_trustworthy_collection_time() -> None:
+    payload = {
+        "pr_state": {
+            "number": 1, "state": "MERGED", "mergedAt": "2026-08-06T07:39:04Z",
+            "commits": [{"oid": "9" * 40}], "mergeCommit": {"oid": "3" * 40},
+            "mergedBy": {"login": "provider-actor"},
+        }
+    }
+    with pytest.raises(CloseoutAdapterError, match="collection timestamp"):
+        evidence_from_closeout_collect(payload)
+
+
+def test_provider_actor_wins_and_merge_timestamp_requires_timezone() -> None:
+    payload = {
+        "observed_at": "2026-08-06T08:00:00Z",
+        "pr_state": {
+            "number": 1, "state": "MERGED", "mergedAt": "2026-08-06T07:39:04Z",
+            "commits": [{"oid": "9" * 40}], "mergeCommit": {"oid": "3" * 40},
+            "mergedBy": {"login": "provider-actor"},
+        }
+    }
+    assert evidence_from_closeout_collect(payload, actor="fallback")["actor"] == "provider-actor"
+    payload["pr_state"]["mergedAt"] = "2026-08-06T07:39:04"
+    with pytest.raises(CloseoutAdapterError, match="timezone"):
+        evidence_from_closeout_collect(payload)
 
 
 def test_evidence_from_closeout_collect_rejects_open_pr() -> None:

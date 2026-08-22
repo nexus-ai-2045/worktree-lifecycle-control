@@ -20,18 +20,18 @@
           "return_path": {"type": "string", "minLength": 1, "description": "作業を再開する時に戻る場所。"},
           "lifecycle_status": {"enum": ["active", "paused", "complete", "unknown"]},
           "note": {"type": "string", "minLength": 1},
-          "owner": {"type": "string", "minLength": 1, "description": "任意。未記入なら HEAD commit の author から導出する。"},
-          "task": {"type": "string", "minLength": 1, "description": "任意。未記入なら branch 名から導出する。"},
+          "owner": {"type": "string", "minLength": 1, "description": "任意の運用メタデータ。未記入時は null。"},
+          "task": {"type": "string", "minLength": 1, "description": "任意の運用メタデータ。未記入時は null。"},
           "created_at": {"type": "string", "format": "date-time"},
           "context_saved": {"type": "boolean"},
           "integration": {
             "oneOf": [
-              {"$ref": "integration-evidence-v2.schema.json"},
+              {"$ref": "integration-evidence-v3.schema.json"},
               {
                 "type": "object",
                 "required": ["status"],
                 "properties": {"status": {"const": "unknown"}},
-                "additionalProperties": true
+                "additionalProperties": false
               }
             ]
           }

@@ -57,6 +57,7 @@ git branch rescue/<name> <head-sha>
 | `primary_worktree` | そもそも削除できない |
 | `pinned` | 人が台帳で明示保護した。git から導出できない唯一の条件 |
 | `path_missing` / `git_status_unknown` / `head_reachability_unknown` | 測定できなかった |
+| `unknown_ignored_content` | Git が無視する内容のうち、明示した再生成可能 allowlist 外のものがある |
 
 統合状態・未 push commit・owner 不明・台帳の記入漏れは `review_signals[]` に出ます。
 判断材料ですが、削除を止めません。
@@ -114,7 +115,9 @@ GitHub 上で PR が merge されたかどうかだけは git から導出でき
 
 不足・SHA不一致・7日超過・未来時刻の場合、`integration_evidence_invalid` を signal に出します。
 
-`observed_at` は「いつ観測したか」であり、merge 時刻ではありません。merge 時刻は
+証跡契約は `integration-evidence-v3` です。`observed_at` は adapter 実行時刻ではなく、
+closeout payload の `observed_at` または `collected_at` を引き継ぎます。欠落時は古い保存済み
+payload の鮮度を更新しないよう fail-closed で失敗します。merge 時刻は
 `subject_merged_at` に別項目として持ちます。両者を混ぜると、7 日より前に merge された PR は
 今この瞬間に観測し直しても永久に stale と判定されます。
 
@@ -140,8 +143,8 @@ v1 は「登録が無いと削除候補にしない」allowlist でした。台�
 構造的に 0 件になり、実測で Projects 63 worktree / nexus_ai 13 worktree のいずれも
 候補 0 件でした。v2 では「登録した物だけ守る」opt-out protection へ反転しています。
 
-`owner` / `task` / `integration` も書けますが、いずれも git から導出できる事実なので
-推奨しません。書いた瞬間から実体との drift が始まります。
+`owner` / `task` は任意の運用メタデータで、未記入時は `null` です。Git の author や branch
+から所有者・タスクを推測しません。`integration` は外部 provider の証跡を任意で保持できます。
 
 期限超過だけで `cleanup_candidate` にはなりません。
 

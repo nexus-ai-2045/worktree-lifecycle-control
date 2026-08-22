@@ -157,6 +157,22 @@ class RegistryError(ValueError):
 
 REGISTRY_SCHEMA_VERSION = "worktree-lifecycle/v2"
 
+REGISTRY_ENTRY_FIELDS = frozenset(
+    {"pin", "reason", "expires_at", "return_path", "lifecycle_status", "note",
+     "owner", "task", "created_at", "context_saved", "integration"}
+)
+REGISTRY_FIELDS = frozenset({"schema_version", "soft_budget_per_repo", "entries"})
+INTEGRATION_EVIDENCE_FIELDS = frozenset(
+    {"status", "provider", "evidence_type", "provider_record_id", "subject_head_sha",
+     "resulting_base_sha", "actor", "observed_at", "subject_merged_at", "observed_by"}
+)
+
+# 内容ではなく、生成元が明確な名前だけを許可する。広い glob は新しい成果物を
+# 誤って再生成可能扱いするため追加しない。
+REGENERATABLE_IGNORED_PARTS = frozenset(
+    {".pytest_cache", ".pytest-tmp", "__pycache__", ".venv"}
+)
+
 
 def load_registry(path: Path | None) -> dict[str, Any]:
     """台帳を読む。台帳は任意であり、無くても scan は成立する。
@@ -180,6 +196,9 @@ def load_registry(path: Path | None) -> dict[str, Any]:
         )
     if not isinstance(payload.get("entries"), dict):
         raise RegistryError("registry entries must be an object")
+    unknown_fields = sorted(set(payload) - REGISTRY_FIELDS)
+    if unknown_fields:
+        raise RegistryError(f"unknown registry field: {unknown_fields[0]}")
     soft_budget = payload.get("soft_budget_per_repo", 3)
     if not isinstance(soft_budget, int) or isinstance(soft_budget, bool) or soft_budget < 1:
         raise RegistryError("soft_budget_per_repo must be an integer greater than zero")
@@ -194,6 +213,9 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
     検査を素通りし、必須項目が空のまま候補へ昇格できた。
     """
     errors: list[str] = []
+    errors.extend(
+        f"unknown registry field: {field}" for field in sorted(set(entry) - REGISTRY_ENTRY_FIELDS)
+    )
     for text_field in ("owner", "task", "return_path", "reason", "note"):
         if text_field not in entry:
             continue
@@ -212,6 +234,11 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
     integration = entry.get("integration")
     if "integration" in entry and not isinstance(integration, dict):
         errors.append("integration must be an object")
+    elif isinstance(integration, dict):
+        unknown_integration = sorted(set(integration) - INTEGRATION_EVIDENCE_FIELDS)
+        errors.extend(
+            f"unknown integration field: {field}" for field in unknown_integration
+        )
     for stamp_field in ("created_at", "expires_at"):
         if stamp_field not in entry:
             continue
@@ -228,6 +255,29 @@ def registry_index(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for path, entry in registry.get("entries", {}).items()
         if isinstance(entry, dict)
     }
+
+
+def registry_entry_for_path(
+    registry: dict[str, Any], path_text: str
+) -> dict[str, Any]:
+    """Resolve a registry entry by filesystem identity, failing safe on uncertainty."""
+    entries = registry.get("entries", {})
+    indexed = registry_index(registry)
+    exact = indexed.get(normalize_path(path_text))
+    if exact is not None:
+        return exact
+    if sys.platform != "darwin":
+        return {}
+    comparison_failed = False
+    for registered_path, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            if os.path.samefile(path_text, registered_path):
+                return entry
+        except OSError:
+            comparison_failed = True
+    return {"_path_identity_unknown": True} if comparison_failed else {}
 
 
 def count_unpushed(path: Path) -> int | None:
@@ -250,6 +300,32 @@ def git_common_dir(repo: Path) -> str:
 def is_dirty(path: Path) -> bool | None:
     proc = run_git(path, "status", "--porcelain=v1", "--untracked-files=normal")
     return None if proc.returncode != 0 else bool(proc.stdout)
+
+
+def ignored_paths(path: Path) -> tuple[str, ...] | None:
+    proc = run_git(
+        path, "status", "--porcelain=v1", "--ignored=matching", "--untracked-files=all"
+    )
+    if proc.returncode != 0:
+        return None
+    result = []
+    for line in proc.stdout.decode("utf-8", errors="surrogateescape").splitlines():
+        if line.startswith("!! "):
+            result.append(line[3:].strip('"'))
+    return tuple(result)
+
+
+def classify_ignored_paths(paths: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    allowed: list[str] = []
+    unknown: list[str] = []
+    for path in paths:
+        parts = tuple(part for part in path.replace("\\", "/").strip("/").split("/") if part)
+        regeneratable = any(
+            part in REGENERATABLE_IGNORED_PARTS or part.endswith(".egg-info") for part in parts
+        )
+        target = allowed if regeneratable else unknown
+        target.append(path)
+    return tuple(allowed), tuple(unknown)
 
 
 def head_committer_at(path: Path) -> str | None:
@@ -329,6 +405,7 @@ def assess_lifecycle(
     reachable: bool | None = None,
     integration_state: str = "unknown",
     detached: bool = False,
+    unknown_ignored_paths: Sequence[str] = (),
 ) -> LifecycleAssessment:
     """worktree 1 件を評価する。
 
@@ -369,6 +446,7 @@ def assess_lifecycle(
         "registry_errors": registry_errors,
         "registered": bool(entry),
         "primary_worktree": primary,
+        "unknown_ignored_paths": list(unknown_ignored_paths),
     }
 
     blockers: list[str] = []
@@ -398,6 +476,8 @@ def assess_lifecycle(
     if pinned:
         # 人が明示した保護。git からは導出できない唯一の blocker。
         blockers.append("pinned")
+    if unknown_ignored_paths:
+        blockers.append("unknown_ignored_content")
 
     # --- signal: 判断材料。削除を止めない -----------------------------------
     if detached:
@@ -423,6 +503,8 @@ def assess_lifecycle(
         signals.append("registry_invalid")
     if deadline is not None and deadline <= now:
         signals.append("review_deadline_reached")
+    if unknown_ignored_paths:
+        signals.append("unknown_ignored_content")
 
     if "path_missing" in blockers or "git_status_unknown" in blockers:
         disposition = "orphan_unknown"
@@ -442,7 +524,6 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
     proc = run_git(repo, "worktree", "list", "--porcelain", "-z")
     if proc.returncode != 0:
         raise RuntimeError(f"git worktree list failed for {repo}")
-    entries = registry_index(registry)
     # base ref の解決は repo 単位で 1 回。worktree ごとに引くと 66 回 git を呼ぶ。
     base_ref = resolve_base_ref(repo)
     result: list[WorktreeRecord] = []
@@ -450,8 +531,10 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
         path_text = raw["path"]
         path = Path(path_text)
         exists = path.exists()
-        entry = entries.get(normalize_path(path_text), {})
+        entry = registry_entry_for_path(registry, path_text)
         dirty = is_dirty(path) if exists else None
+        ignored = ignored_paths(path) if exists else None
+        ignored_allowed, ignored_unknown = classify_ignored_paths(ignored or ())
         unpushed = count_unpushed(path) if exists else None
         head_sha = raw.get("head")
         detached = bool(raw.get("detached"))
@@ -479,7 +562,9 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             reachable=reachable,
             integration_state=integration_state,
             detached=detached,
+            unknown_ignored_paths=(ignored_unknown if ignored is not None else ("<measurement-failed>",)),
         )
+        assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
         integration_value = entry.get("integration")
         integration = integration_value if isinstance(integration_value, dict) else {}
         integration_validation = validate_integration_evidence(integration, raw.get("head"), now=now)
@@ -537,7 +622,7 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--json", action="store_true")
     evidence = subparsers.add_parser(
         "evidence-from-closeout",
-        help="normalize post_merge_closeout_report collect JSON into integration-evidence-v2",
+        help="normalize post_merge_closeout_report collect JSON into integration-evidence-v3",
     )
     evidence.add_argument(
         "--input",
@@ -678,7 +763,9 @@ def run_inventory(args: argparse.Namespace) -> int:
             "total": len(records),
         },
         "registry_validation_status": (
-            "partial" if any("registry_invalid" in record.blockers for record in records) else "valid"
+            "partial"
+            if any("registry_invalid" in record.review_signals for record in records)
+            else "valid"
         ),
         "read_only": True,
         "soft_budget": soft_budget,
