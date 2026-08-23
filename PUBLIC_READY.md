@@ -23,8 +23,10 @@ visibility は既に public です。これ以上の visibility 変更はしま�
 - [x] visibility read-back: PUBLIC
 - [x] secret scanning / push protection: enabled。secret-scanning alerts 0 件
 - [x] remote CI: public 化後の PR では ubuntu / windows とも SUCCESS
+- [x] GitHub の Private vulnerability reporting: enabled
+- [x] CodeQL default setup: configured
+- [x] ruleset `protect-main`: default branch 削除禁止 / force push 禁止 / squash のみ / 必須 CI / 最新 base / thread 解決
 - [ ] 既存履歴 blob の個人ホームを模した test fixture。履歴 rewrite はしない方針
-- [ ] GitHub の Private vulnerability reporting（API 上は enabled=false）
 
 ## 検査の限界
 
