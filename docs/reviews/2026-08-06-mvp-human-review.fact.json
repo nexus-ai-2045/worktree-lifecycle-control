@@ -1,0 +1,53 @@
+{
+  "schema_version": "fact-provenance/v1",
+  "thread_id": "019fd2e2-0454-7db0-a157-9c69578a2c02",
+  "recorded_at": "2026-08-06T03:30:51+09:00",
+  "recorded_by": "codex",
+  "claims": [
+    {
+      "claim": "The nexus_ai review packet contained zero cleanup candidates and five protected or unknown worktrees",
+      "classification": "fact",
+      "actor": "worktree-lifecycle-control",
+      "event_time": "2026-08-06T03:30:51+09:00",
+      "scope": "five Git-registered nexus_ai worktrees",
+      "source": ".local/reviews/nexus-ai-worktree-human-review.json",
+      "observed_at": "2026-08-06T03:30:51+09:00"
+    },
+    {
+      "claim": "The review packet classified four worktrees as protected_dirty and one as protected_unpushed",
+      "classification": "fact",
+      "actor": "worktree-lifecycle-control",
+      "event_time": "2026-08-06T03:30:51+09:00",
+      "scope": "five Git-registered nexus_ai worktrees",
+      "source": ".local/reviews/nexus-ai-worktree-human-review.json",
+      "observed_at": "2026-08-06T03:30:51+09:00"
+    },
+    {
+      "claim": "The focused local test suite passed 15 tests with exit code zero",
+      "classification": "fact",
+      "actor": "pytest",
+      "event_time": "2026-08-06T03:30:51+09:00",
+      "scope": "worktree-lifecycle-control local MVP",
+      "source": "python -m pytest -q",
+      "observed_at": "2026-08-06T03:30:51+09:00"
+    },
+    {
+      "claim": "Adopt the local MVP and authorize a local commit as the next review decision",
+      "classification": "non_fact",
+      "actor": "codex",
+      "event_time": "2026-08-06T03:30:51+09:00",
+      "scope": "human review recommendation",
+      "non_fact_kind": "proposal",
+      "basis": "local tests, read-only smoke, separation of responsibilities, and fail-closed cleanup classification"
+    },
+    {
+      "claim": "Projects-wide operational behavior is not verified",
+      "classification": "unknown",
+      "actor": "codex",
+      "event_time": "unknown",
+      "scope": "Projects-wide integration",
+      "unknown_reason": "the MVP is not wired into Projects scheduling, hooks, or shared runtime",
+      "verification_next": "after human review, implement a bounded shadow-mode pilot and measure its report"
+    }
+  ]
+}
