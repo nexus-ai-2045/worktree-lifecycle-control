@@ -1,18 +1,18 @@
 # コントリビューション
 
-人間が手順を踏む必要はありません。AI に次を貼ってください。
+人間が手順を踏む必要はありません。AI に次を貼ってください。先に危険レビューを出させます。
 
 ```text
-このリポジトリを CONTRIBUTING のルールで直して。
+このリポジトリを読んで直して。先に危険レビューを出せ。
+削除・--force・GitHub write・visibility 変更・secret 露出・個人パスを実行していないか。
+cleanup_candidate を削除許可と読まない。unknown を安全と読まない。
+問題があればコードを書く前に止めろ。CONTRIBUTING を守れ。
+
 https://github.com/nexus-ai-2045/worktree-lifecycle-control
-```
-
-```text
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/README.md
-```
-
-```text
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/CONTRIBUTING.md
+https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/SECURITY.md
+https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/PREFLIGHT.md
 ```
 
 ## ルール
