@@ -13,8 +13,8 @@ v1/v2 は「統合された証跡が台帳にある worktree だけを削除候�
 
 | 対象 | worktree 数 | cleanup_candidate | unknown_count |
 | --- | --- | --- | --- |
-| Projects | 63 | 0 | 63 |
-| nexus_ai | 13 | 0 | 13 |
+| 複数リポジトリを含む作業場 | 数十 | 0 | 全件 |
+| そのうち入れ子の 1 リポジトリ | 十数 | 0 | 全件 |
 
 台帳が空である限り候補は構造的に 0 件になる。このツールが解こうとした問題は
 「worktree が無数に増えて片付かない」であり、その問題に対して 1 件も寄与していなかった。
@@ -93,8 +93,9 @@ git branch rescue/<name> <head-sha>
 
 ## Evidence
 
-- 2026-08-16 dogfood 実測: Projects 63 worktree / nexus_ai 13 worktree で候補 0 件。
-- 2026-08-20 本 ADR 実装後の実測: Projects 66 worktree で候補 47 件、保護 19 件、
+- 2026-08-16 dogfood 実測: 複数リポジトリを含む作業場の数十 worktree と、
+  入れ子の 1 リポジトリの十数 worktree で候補 0 件。
+- 2026-08-20 本 ADR 実装後の実測: 同じ作業場の数十 worktree で過半が候補、保護は少数、
   到達不能 1 件 (`.claude/worktrees/<name>`、detached、branch なし)。
 - 危険 1 件は、v2 の判定と本 ADR の判定を別々の方法で走らせて同じ 1 件に一致した。
 
@@ -120,9 +121,9 @@ git branch rescue/<name> <head-sha>
 
 ## 却下した代替案
 
-- **63 件を手で台帳登録する** — 初期コストが高く、owner / dirty / 統合状態は git が正本なので
+- **数十件を手で台帳登録する** — 初期コストが高く、owner / dirty / 統合状態は git が正本なので
   写しを人が維持し続けることになる。SSOT に反し、書いた瞬間から drift が始まる。
-- **worktree 作成時に登録を強制する** — worktree の親フォルダが 8 箇所に分散しており、
+- **worktree 作成時に登録を強制する** — worktree の親フォルダが複数箇所に分散しており、
   複数の agent が別経路で作成しているため、登録を強制できる関所が存在しない。
 - **squash 検出に追加ヒューリスティクスを入れる** (`--effort=3` 相当) — 統合状態は signal であって
   blocker ではないため、取りこぼしは「未統合と表示される」で済む。判定を重くする割に blocker を動かさない。

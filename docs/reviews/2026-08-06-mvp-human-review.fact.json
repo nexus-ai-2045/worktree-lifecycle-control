@@ -5,12 +5,12 @@
   "recorded_by": "codex",
   "claims": [
     {
-      "claim": "The nexus_ai review packet contained zero cleanup candidates and five protected or unknown worktrees",
+      "claim": "The dogfood review packet contained zero cleanup candidates and five protected or unknown worktrees",
       "classification": "fact",
       "actor": "worktree-lifecycle-control",
       "event_time": "2026-08-06T03:30:51+09:00",
-      "scope": "five Git-registered nexus_ai worktrees",
-      "source": ".local/reviews/nexus-ai-worktree-human-review.json",
+      "scope": "five Git-registered worktrees in one dogfood repository",
+      "source": "local human-review packet (unpublished; not included in this repository)",
       "observed_at": "2026-08-06T03:30:51+09:00"
     },
     {
@@ -18,8 +18,8 @@
       "classification": "fact",
       "actor": "worktree-lifecycle-control",
       "event_time": "2026-08-06T03:30:51+09:00",
-      "scope": "five Git-registered nexus_ai worktrees",
-      "source": ".local/reviews/nexus-ai-worktree-human-review.json",
+      "scope": "five Git-registered worktrees in one dogfood repository",
+      "source": "local human-review packet (unpublished; not included in this repository)",
       "observed_at": "2026-08-06T03:30:51+09:00"
     },
     {

@@ -17,6 +17,7 @@
 - [x] README / SECURITY.md / CONTRIBUTING.md / PREFLIGHT.md あり
 - [x] README 情報設計ゲート pass（目的 / できること / クイックスタート / 制約）
 - [x] 現在 tree の secret scan 0 件
+- [x] ADR / 人間レビューの dogfood 実測から非公開 repo 名、正確な本数、`.local/` ファイル名を外した
 - [x] 作者の実効名義は `nexus_ai` の GitHub noreply。squash の committer `GitHub <noreply@github.com>` は受け入れ
 - [ ] 既存履歴 blob の個人ホームを模した test fixture。履歴 rewrite はしない方針
 - [ ] remote CI。GitHub Actions は billing / spending limit で未起動
