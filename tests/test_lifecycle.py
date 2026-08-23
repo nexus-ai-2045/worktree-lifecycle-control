@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,7 @@ from worktree_lifecycle_control.cli import (
     RegistryError,
     review_day_counts,
     registry_entry_for_path,
+    registry_match_for_path,
 )
 from worktree_lifecycle_control.evidence import validate_integration_evidence
 
@@ -159,11 +161,111 @@ def test_invalid_integration_status_requires_review() -> None:
     assert result.disposition == "review_required"
 
 
-def test_macos_registry_matching_uses_filesystem_identity(monkeypatch) -> None:
+def test_macos_registry_matching_uses_filesystem_identity(monkeypatch, tmp_path) -> None:
+    """大小違いの綴りでも、実体が同じなら pin を拾う (macOS)。
+
+    問い合わせ対象は実在するパスで測る。存在しないパスを渡すと、同一性の
+    判定自体ができず不確実へ倒れるのが正しい挙動であり、それは別テストで固定する。
+    """
     registry = {"entries": {"/Users/Yas/Work": {"pin": True}}}
     monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "darwin")
     monkeypatch.setattr("worktree_lifecycle_control.cli.os.path.samefile", lambda a, b: True)
-    assert registry_entry_for_path(registry, "/users/yas/work") == {"pin": True}
+    assert registry_entry_for_path(registry, str(tmp_path)) == {"pin": True}
+
+
+def test_stale_registry_path_does_not_suppress_unrelated_worktrees(monkeypatch, tmp_path) -> None:
+    """台帳の腐った 1 行が、無関係な worktree の判定を止めない (macOS)。
+
+    以前は台帳のどれか 1 件で samefile が OSError になると、一致しなかった
+    全 worktree に `_path_identity_unknown` を付けていた。結果、削除済みの
+    パスが台帳に 1 行残っているだけで repo 全体の削除候補が 0 件になった。
+    """
+    def raise_missing(_a: str, _b: str) -> bool:
+        raise OSError(2, "No such file or directory")
+
+    registry = {"entries": {"/deleted/somewhere/else": {"pin": True}}}
+    monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "darwin")
+    monkeypatch.setattr("worktree_lifecycle_control.cli.os.path.samefile", raise_missing)
+
+    entry, registered = registry_match_for_path(registry, str(tmp_path))
+    assert entry == {}
+    assert registered is False
+
+    # 問い合わせ対象そのものを測れない時だけ、不確実として扱う。
+    unmeasurable, _ = registry_match_for_path(registry, str(tmp_path / "missing"))
+    assert unmeasurable == {"_path_identity_unknown": True}
+
+
+def test_empty_registry_entry_is_registered(tmp_path) -> None:
+    """`{}` は schema が許す「登録済み・宣言なし」であり、未登録ではない。
+
+    `bool(entry)` で数えていたため、registry_coverage.registered が実際より
+    少なく出ていた。
+    """
+    registry = {"entries": {str(tmp_path): {}}}
+    entry, registered = registry_match_for_path(registry, str(tmp_path))
+    assert entry == {}
+    assert registered is True
+
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry=entry, registered=registered, now=NOW, reachable=True,
+    )
+    assert result.observations["registered"] is True
+    assert result.disposition == "cleanup_candidate"
+
+    absent = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={}, registered=False, now=NOW, reachable=True,
+    )
+    assert absent.observations["registered"] is False
+
+
+def test_absent_integration_declaration_is_not_an_error() -> None:
+    """統合宣言の省略は正常。台帳自体が任意なので、大半の worktree がこれである。
+
+    空の宣言を「壊れた宣言」と同じ扱いにすると、正常な省略に対して報告が毎回
+    integration_evidence_errors を出す。
+    """
+    absent = validate_integration_evidence({}, HEAD, now=NOW)
+    assert absent.verified is False
+    assert absent.errors == ()
+
+    result = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={}, now=NOW, reachable=True,
+    )
+    assert "integration_evidence_invalid" not in result.review_signals
+    assert result.disposition == "cleanup_candidate"
+
+    # 台帳に明示的に書かれた空オブジェクトは、省略ではなく壊れた宣言である。
+    declared = assess_lifecycle(
+        exists=True, dirty=False, unpushed=0, locked=False, head=HEAD,
+        entry={"integration": {}}, now=NOW, reachable=True,
+    )
+    assert "registry_invalid" in declared.review_signals
+    assert declared.disposition == "review_required"
+
+
+def test_published_schema_versions_are_retained() -> None:
+    """公開済みの契約を消さない。保存済み成果物が検証器を失う。
+
+    v3 を足すことは v1 / v2 を消す理由にならない。
+    """
+    schemas = Path(__file__).resolve().parents[1] / "schemas"
+    for name in (
+        "registry-v1.schema.json",
+        "registry-v2.schema.json",
+        "scan-report-v2.schema.json",
+        "scan-report-v3.schema.json",
+        "review-packet-v2.schema.json",
+        "review-packet-v3.schema.json",
+        "integration-evidence-v2.schema.json",
+        "integration-evidence-v3.schema.json",
+    ):
+        path = schemas / name
+        assert path.is_file(), f"published schema was deleted: {name}"
+        __import__("json").loads(path.read_text(encoding="utf-8"))
 
 
 def test_unknown_ignored_content_is_protected_but_known_cache_is_not() -> None:
@@ -619,6 +721,31 @@ def test_provider_actor_wins_and_merge_timestamp_requires_timezone() -> None:
     payload["pr_state"]["mergedAt"] = "2026-08-06T07:39:04"
     with pytest.raises(CloseoutAdapterError, match="timezone"):
         evidence_from_closeout_collect(payload)
+
+
+def test_injected_collection_time_must_be_timezone_aware() -> None:
+    """呼び出し側が渡す収集時刻にも、payload と同じ契約を課す。
+
+    naive な datetime をそのまま書き出すと、offset の無い observed_at を持つ
+    「成功した」証跡ができ、integration-evidence-v3 に違反する。
+    """
+    payload = {
+        "pr_state": {
+            "number": 1, "state": "MERGED", "mergedAt": "2026-08-06T07:39:04Z",
+            "commits": [{"oid": "9" * 40}], "mergeCommit": {"oid": "3" * 40},
+            "mergedBy": {"login": "provider-actor"},
+        }
+    }
+    with pytest.raises(CloseoutAdapterError, match="timezone"):
+        evidence_from_closeout_collect(payload, now=datetime(2026, 8, 6, 8, 0, 0))
+
+    aware = evidence_from_closeout_collect(
+        payload, now=datetime(2026, 8, 6, 8, 0, 0, tzinfo=timezone.utc)
+    )
+    assert aware["observed_at"] == "2026-08-06T08:00:00Z"
+    assert validate_integration_evidence(
+        aware, "9" * 40, now=datetime(2026, 8, 6, 8, 0, 0, tzinfo=timezone.utc)
+    ).verified is True
 
 
 def test_evidence_from_closeout_collect_rejects_open_pr() -> None:

@@ -164,6 +164,13 @@ def validate_integration_evidence(
     """
     if not isinstance(integration, dict):
         return EvidenceValidation(False, ("integration must be an object",))
+    if not integration:
+        # 宣言が無いことは誤りではない。台帳自体が任意なので、大半の worktree は
+        # ここへ来る。空の宣言を「壊れた宣言」と同じ扱いにすると、正常な省略に
+        # 対して報告が毎回 integration_evidence_errors を出す。
+        # 台帳に `"integration": {}` と明示的に書いた場合は、registry 側の
+        # validate_integration_shape が空を拒否するため見落とさない。
+        return EvidenceValidation(False, ())
     shape_errors = validate_integration_shape(integration)
     if integration.get("status") != "verified":
         return EvidenceValidation(False, shape_errors)

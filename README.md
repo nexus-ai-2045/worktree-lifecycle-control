@@ -93,7 +93,16 @@ python $env:USERPROFILE\Projects\shared\scripts\post_merge_closeout_report.py co
   --pr 1 `
   --cwd . `
   --json |
-  python -m worktree_lifecycle_control evidence-from-closeout --json
+  python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account> --json
+```
+
+`--actor` は省略できません。2026-08-20 時点の collector は `mergedBy` を要求しない
+ため、省略すると「誰が merge したか不明」のまま証跡を作らず exit 2 で失敗します
+（欠落を既定値で埋めません）。collector が `mergedBy` を返すようになれば、そちらが
+優先され `--actor` は不要になります。merge した account は次で確認できます。
+
+```powershell
+gh pr view 1 --repo nexus-ai-2045/worktree-lifecycle-control --json mergedBy --jq .mergedBy.login
 ```
 
 ## 統合証跡 (任意)

@@ -189,7 +189,15 @@ def evidence_from_closeout_collect(
         raise CloseoutAdapterError(str(error)) from error
 
     collection_time = now
-    if collection_time is None:
+    if collection_time is not None:
+        # 注入された収集時刻も payload の値と同じ契約で検査する。naive な
+        # datetime をそのまま書き出すと、offset の無い observed_at を持つ
+        # 「成功した」証跡ができ、integration-evidence-v3 に違反する。
+        if not isinstance(collection_time, datetime):
+            raise CloseoutAdapterError("collection timestamp must be a datetime")
+        if collection_time.tzinfo is None or collection_time.utcoffset() is None:
+            raise CloseoutAdapterError("collection timestamp must include a timezone")
+    else:
         raw_collection_time = payload.get("observed_at") or payload.get("collected_at")
         if not isinstance(raw_collection_time, str) or not raw_collection_time.strip():
             raise CloseoutAdapterError(
@@ -218,6 +226,14 @@ def evidence_from_closeout_collect(
     if not isinstance(provider, str) or not provider.strip() or provider == "unknown":
         provider = "github"
 
+    # 書き出す文字列そのものを契約で検査する。datetime が tz 付きでも、秒を
+    # 含む offset のような RFC 3339 外の表現になりうる。
+    observed_at_text = collection_time.isoformat().replace("+00:00", "Z")
+    try:
+        parse_rfc3339(observed_at_text, field="collection timestamp")
+    except ValueError as error:
+        raise CloseoutAdapterError(str(error)) from error
+
     return {
         "status": "verified",
         "provider": provider,
@@ -229,7 +245,7 @@ def evidence_from_closeout_collect(
         # observed_at は「いつ観測したか」。merge 時刻ではない。両者を混ぜると、
         # 鮮度窓 (既定 7 日) を過ぎて merge された PR は、今この瞬間に観測し直しても
         # 永久に stale と判定され、統合済みの worktree が二度と候補にならない。
-        "observed_at": collection_time.isoformat().replace("+00:00", "Z"),
+        "observed_at": observed_at_text,
         "subject_merged_at": merged_at,
         **({"observed_by": observed_by} if observed_by else {}),
     }

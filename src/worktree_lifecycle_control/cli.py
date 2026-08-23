@@ -272,27 +272,60 @@ def registry_index(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
-def registry_entry_for_path(
+def registry_match_for_path(
     registry: dict[str, Any], path_text: str
-) -> dict[str, Any]:
-    """Resolve a registry entry by filesystem identity, failing safe on uncertainty."""
+) -> tuple[dict[str, Any], bool]:
+    """台帳エントリを実体同一性で解決し、(内容, 一致したか) を返す。
+
+    内容と一致有無を分けて返す。v2 schema は中身の無いエントリ `{}` を明示的に
+    許すため、`bool(entry)` では「鍵はあるが空」と「鍵が無い」を区別できず、
+    登録済みの worktree を未登録として数えていた。
+
+    不確実性の扱いも「問い合わせ対象を測れなかった時」だけに限る。台帳側の
+    1 件が消えているだけで repo 全体を不確実にすると、腐った 1 行が全 worktree
+    を review_required に落とし、削除候補が永久に 0 件になる。
+    """
     entries = registry.get("entries", {})
     indexed = registry_index(registry)
     exact = indexed.get(normalize_path(path_text))
     if exact is not None:
-        return exact
+        return exact, True
     if sys.platform != "darwin":
-        return {}
-    comparison_failed = False
+        return {}, False
+    # macOS の normcase は POSIX 実装なので、大小を区別しない APFS 上でも
+    # 何もしない。ここだけは実体 (inode) で突き合わせる。
+    # 対象そのものを測れないなら、どの台帳エントリとも同一性を判定できない。
+    if not _path_is_measurable(path_text):
+        return {"_path_identity_unknown": True}, False
     for registered_path, entry in entries.items():
         if not isinstance(entry, dict):
             continue
         try:
             if os.path.samefile(path_text, registered_path):
-                return entry
+                return entry, True
         except OSError:
-            comparison_failed = True
-    return {"_path_identity_unknown": True} if comparison_failed else {}
+            # 辿れないのは台帳側のパスである (問い合わせ対象は直前に測れている)。
+            # 辿れないパスが対象と同一実体であることはないので、この 1 件だけを
+            # 飛ばす。ただし走査中に対象が消えた可能性はあるため測り直し、
+            # 消えていればそこで不確実へ倒す。
+            if not _path_is_measurable(path_text):
+                return {"_path_identity_unknown": True}, False
+    return {}, False
+
+
+def _path_is_measurable(path_text: str) -> bool:
+    try:
+        os.stat(path_text)
+    except OSError:
+        return False
+    return True
+
+
+def registry_entry_for_path(
+    registry: dict[str, Any], path_text: str
+) -> dict[str, Any]:
+    """Resolve a registry entry by filesystem identity, failing safe on uncertainty."""
+    return registry_match_for_path(registry, path_text)[0]
 
 
 def count_unpushed(path: Path) -> int | None:
@@ -430,6 +463,7 @@ def assess_lifecycle(
     detached: bool = False,
     unknown_ignored_paths: Sequence[str] = (),
     ignored_measurement_failed: bool = False,
+    registered: bool | None = None,
 ) -> LifecycleAssessment:
     """worktree 1 件を評価する。
 
@@ -448,6 +482,9 @@ def assess_lifecycle(
     pinned = entry.get("pin") is True
     context_saved = entry.get("context_saved") is True
     registry_errors = validate_entry(entry)
+    # 台帳に鍵があるかどうかは、中身の有無とは別の事実。空エントリ `{}` は
+    # schema 上正当な「登録済み・宣言なし」であり、未登録として数えない。
+    is_registered = bool(entry) if registered is None else registered
     try:
         deadline = parse_deadline(entry.get("expires_at"))
     except (TypeError, ValueError):
@@ -468,7 +505,7 @@ def assess_lifecycle(
         "integration_evidence_valid": integration_validation.verified,
         "context_saved": context_saved,
         "registry_errors": registry_errors,
-        "registered": bool(entry),
+        "registered": is_registered,
         "primary_worktree": primary,
         "unknown_ignored_paths": list(unknown_ignored_paths),
         "ignored_measurement_failed": ignored_measurement_failed,
@@ -522,7 +559,7 @@ def assess_lifecycle(
         signals.append("owner_unknown")
     if lifecycle == "active":
         signals.append("lifecycle_active")
-    if entry and not context_saved:
+    if is_registered and not context_saved:
         signals.append("context_not_saved")
     if integration.get("status") == "verified" and integration_validation.errors:
         signals.append("integration_evidence_invalid")
@@ -560,7 +597,7 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
         path_text = raw["path"]
         path = Path(path_text)
         exists = path.exists()
-        entry = registry_entry_for_path(registry, path_text)
+        entry, registered = registry_match_for_path(registry, path_text)
         dirty = is_dirty(path) if exists else None
         ignored = ignored_paths(path) if exists else None
         ignored_allowed, ignored_unknown = classify_ignored_paths(ignored or ())
@@ -593,6 +630,7 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             detached=detached,
             unknown_ignored_paths=(ignored_unknown if ignored is not None else ("<measurement-failed>",)),
             ignored_measurement_failed=ignored is None and exists,
+            registered=registered,
         )
         assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
         integration_value = entry.get("integration")
