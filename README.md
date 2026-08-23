@@ -7,13 +7,15 @@ Git worktree を増えたフォルダとして放置せず、到達不能な det
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
-![紐で幹に結ばれた作業台と、紐が切れて浮かぶ 1 台](docs/assets/detached-worktree-hero.jpg)
+[![紐で幹に結ばれた作業台と、紐が切れて浮かぶ 1 台](docs/assets/detached-worktree-hero.jpg)](docs/decisions/0002-protect-what-git-does-not.md)
 
-結びが残っている worktree は、消しても branch から戻せる。切れた 1 台だけが、git の外に落ちる。
+結びが残っている worktree は、消しても branch から戻せる。切れた 1 台だけが、git の外に落ちる。絵は [ADR 0002](docs/decisions/0002-protect-what-git-does-not.md) へ行く。
 
 ## 目的 — git が守らない 1 行だけを守る
 
-![未 push は残る、dirty は git が拒否、detached だけ消える](docs/assets/protect-what-git-does-not.svg)
+[![未 push は残る、dirty は git が拒否、detached だけ消える](docs/assets/protect-what-git-does-not.svg)](tests/test_reachability.py)
+
+3 列は隔離 repo での対照実験。クリック先は毎回同じことを再現する [test_reachability.py](tests/test_reachability.py)。
 
 > detached HEAD の worktree を消すと、その commit は無警告で消え、`git gc` の後は戻せません。
 
@@ -39,63 +41,22 @@ git branch rescue/<name> <head-sha>
 
 ## クイックスタート
 
-3 手。削除はしない。台帳は無くてよい。
-
-```mermaid
-flowchart LR
-  A["1. 入れる"] --> B["2. scan する"]
-  B --> C["3. danger_count を見る"]
-```
-
-**1. 入れる**（Python 3.11+）
-
-```powershell
-python -m pip install -e ".[test]"
-```
-
-**2. scan する**
-
-`path\to\your-repo` を、見たい Git リポジトリのパスに変える。
-
-```powershell
-python -m worktree_lifecycle_control scan --repo path\to\your-repo --json
-```
-
-read-only。保存したいときだけ `--report-path .local\reports\worktrees.json` を足す。
-
-**3. 見るもの**
-
-JSON 先頭の `danger_count` が、git が守らない detached HEAD の件数。人が rescue branch を付ける。この CLI は消さない。
-
-レビュー用 packet も同じです。削除しません。
-
-```powershell
-python -m worktree_lifecycle_control review-packet --repo path\to\your-repo --json
-```
-
-## AI に渡す
-
-手順は書かない。次をそのまま貼る。
+人間が pip や scan を叩く手順は置かない。次を AI にそのまま貼る。
 
 ```text
+このリポジトリを読んで直して。先に危険レビューを出せ。
+削除・--force・GitHub write・visibility 変更・secret 露出・個人パスを実行していないか。
+cleanup_candidate を削除許可と読まない。unknown を安全と読まない。
+問題があればコードを書く前に止めろ。CONTRIBUTING を守れ。
+
 https://github.com/nexus-ai-2045/worktree-lifecycle-control
-```
-
-```text
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/README.md
-```
-
-```text
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/CONTRIBUTING.md
+https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/SECURITY.md
+https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/PREFLIGHT.md
 ```
 
-貼る文の例:
-
-```text
-このリポジトリを CONTRIBUTING のルールで直して。
-https://github.com/nexus-ai-2045/worktree-lifecycle-control
-```
-
+コマンド名は上の「できること」を見れば足りる。この CLI は消さない。
 ## 判定
 
 危険条件は一つの状態へ潰さず、`blockers[]` へ同時に保持します。削除を止めない情報は `review_signals[]` へ分けます。
