@@ -35,8 +35,8 @@ recorded_by: codex
 - actor: `codex`
 - event_time: `2026-08-06T03:30:51+09:00`
 - observed_at: `2026-08-06T03:30:51+09:00`
-- scope: `nexus_aiのGit登録済みworktree 5本`
-- source: `.local/reviews/nexus-ai-worktree-human-review.json`
+- scope: `dogfood した 1 リポジトリの Git 登録 worktree 5本`
+- source: `ローカルの human-review packet（未公開。この repo には含めない）`
 - fact: 削除候補は0本、保護対象は5本だった。
 - fact: 内訳は`protected_dirty` 4本、`protected_unpushed` 1本だった。
 - fact: review packetの`executed`は`false`だった。
