@@ -2,9 +2,7 @@
 
 Git worktree を「増えたフォルダ」ではなく、所有者・タスク・期限・統合証跡を持つ期限付き作業資産として管理するためのローカル制御ツールです。
 
-現在は nexus_ai 内の private MVP です。Projects 全体への配線、定期実行、worktree・branch の削除、GitHub 操作は行いません。
-
-## 原則
+## 目的
 
 - **git が守るものを二重に守らない。git が守らないものだけを守る。**
 - 経過日数は通知条件であり、削除条件にしない。
@@ -15,6 +13,14 @@ Git worktree を「増えたフォルダ」ではなく、所有者・タスク�
 
 判定モデルの根拠と、v2 から反転した理由は
 [ADR 0002](docs/decisions/0002-protect-what-git-does-not.md) にあります。
+
+## できること
+
+この CLI は read-only の棚卸しと、人間レビュー用の cleanup 候補判定までを行います。
+
+- `scan`: worktree ごとの disposition / blockers / review_signals を JSON で出す
+- `review-packet`: 削除を実行せず、人間レビュー用 packet を出す
+- `evidence-from-closeout`: 既存の closeout collector 出力を統合証跡へ正規化する
 
 ## 何から守るのか
 
@@ -62,13 +68,13 @@ git branch rescue/<name> <head-sha>
 統合状態・未 push commit・owner 不明・台帳の記入漏れは `review_signals[]` に出ます。
 判断材料ですが、削除を止めません。
 
-## 実行例
+## クイックスタート
 
 ```powershell
 python -m worktree_lifecycle_control scan `
-  --repo "$env:USERPROFILE\Projects\Documents\nexus_ai" `
+  --repo path\to\your-repo `
   --registry registry.example.json `
-  --report-path .local\reports\nexus-ai-worktrees.json `
+  --report-path .local\reports\worktrees.json `
   --json
 ```
 
@@ -79,17 +85,17 @@ python -m worktree_lifecycle_control scan `
 
 ```powershell
 python -m worktree_lifecycle_control review-packet `
-  --repo "$env:USERPROFILE\Projects\Documents\nexus_ai" `
+  --repo path\to\your-repo `
   --registry registry.example.json `
-  --report-path .local\reviews\nexus-ai-review.json `
+  --report-path .local\reviews\review.json `
   --json
 ```
 
 既存の closeout collector から統合証跡を正規化できます（GitHub 取得は collector 側）。
 
 ```powershell
-python $env:USERPROFILE\Projects\shared\scripts\post_merge_closeout_report.py collect `
-  --repo nexus-ai-2045/worktree-lifecycle-control `
+python path\to\post_merge_closeout_report.py collect `
+  --repo owner/name `
   --pr 1 `
   --cwd . `
   --json |
@@ -102,7 +108,7 @@ python $env:USERPROFILE\Projects\shared\scripts\post_merge_closeout_report.py co
 優先され `--actor` は不要になります。merge した account は次で確認できます。
 
 ```powershell
-gh pr view 1 --repo nexus-ai-2045/worktree-lifecycle-control --json mergedBy --jq .mergedBy.login
+gh pr view 1 --repo owner/name --json mergedBy --jq .mergedBy.login
 ```
 
 ## 統合証跡 (任意)
@@ -149,8 +155,7 @@ payload の鮮度を更新しないよう fail-closed で失敗します。merge
 | `lifecycle_status` | `active` なら作業中として扱う |
 
 v1 は「登録が無いと削除候補にしない」allowlist でした。台帳が空である限り候補が
-構造的に 0 件になり、実測で Projects 63 worktree / nexus_ai 13 worktree のいずれも
-候補 0 件でした。v2 では「登録した物だけ守る」opt-out protection へ反転しています。
+構造的に 0 件になりました。v2 では「登録した物だけ守る」opt-out protection へ反転しています。
 
 `owner` / `task` は任意の運用メタデータで、未記入時は `null` です。Git の author や branch
 から所有者・タスクを推測しません。`integration` は外部 provider の証跡を任意で保持できます。
@@ -175,3 +180,16 @@ v1 は「登録が無いと削除候補にしない」allowlist でした。台�
 ```text
 作成から: 不明（台帳未登録） / HEAD commitから: 22日 / 見直し: 未設定
 ```
+
+## 制約
+
+- 削除、`--force`、GitHub write、定期実行、Projects 全体への配線は行いません。
+- `cleanup_candidate` は削除許可ではなく、人間レビュー用の候補です。
+- scan / review packet はヒューリスティックであり、専用 secret scanner や人間レビューを置き換えません。
+- 実運用 registry の owner / task 台帳、`.local/` の scan 結果は公開対象にしないでください。
+- CI が緑でも、公開・visibility 変更・release の承認にはなりません。
+
+## ライセンスと出典
+
+コードは MIT License（`LICENSE`）。Copyright (c) 2026 nexus_ai。
+第三者データのミラーは含みません。

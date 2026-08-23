@@ -265,11 +265,12 @@ def validate_entry(entry: dict[str, Any]) -> list[str]:
 
 
 def registry_index(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        normalize_path(path): entry
-        for path, entry in registry.get("entries", {}).items()
-        if isinstance(entry, dict)
-    }
+    indexed: dict[str, dict[str, Any]] = {}
+    for path, entry in registry.get("entries", {}).items():
+        if not isinstance(entry, dict):
+            raise RegistryError(f"registry entry must be an object: {path}")
+        indexed[normalize_path(path)] = entry
+    return indexed
 
 
 def registry_match_for_path(

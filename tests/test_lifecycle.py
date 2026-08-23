@@ -17,6 +17,7 @@ from worktree_lifecycle_control.cli import (
     RegistryError,
     review_day_counts,
     registry_entry_for_path,
+    registry_index,
     registry_match_for_path,
 )
 from worktree_lifecycle_control.evidence import validate_integration_evidence
@@ -136,6 +137,11 @@ def test_malformed_registry_entry_fails_closed(tmp_path) -> None:
         load_registry(path)
 
 
+def test_registry_index_rejects_non_object_entries() -> None:
+    with pytest.raises(RegistryError, match="must be an object"):
+        registry_index({"entries": {"/worktree": None}})
+
+
 def test_posix_backslash_is_not_an_ignored_path_separator(monkeypatch) -> None:
     monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "linux")
     allowed, unknown = classify_ignored_paths([r"private\.venv\secret"])
@@ -167,7 +173,7 @@ def test_macos_registry_matching_uses_filesystem_identity(monkeypatch, tmp_path)
     問い合わせ対象は実在するパスで測る。存在しないパスを渡すと、同一性の
     判定自体ができず不確実へ倒れるのが正しい挙動であり、それは別テストで固定する。
     """
-    registry = {"entries": {"/Users/Yas/Work": {"pin": True}}}
+    registry = {"entries": {"/var/tmp/CaseFold/Work": {"pin": True}}}
     monkeypatch.setattr("worktree_lifecycle_control.cli.sys.platform", "darwin")
     monkeypatch.setattr("worktree_lifecycle_control.cli.os.path.samefile", lambda a, b: True)
     assert registry_entry_for_path(registry, str(tmp_path)) == {"pin": True}
@@ -623,7 +629,7 @@ def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
                 {"oid": "f5b0a5fdae56e34bd5117c6487e31ce86ebbfc1c"},
                 {"oid": "931ce10e9dcd1e7e44a1980fc279c10db28aae94"},
             ],
-            "mergedBy": {"login": "say-yas"},
+            "mergedBy": {"login": "example-merger"},
         },
         "account_context": {
             "checks": {"active_api_login": {"status": "ok", "value": "nexus-ai-2045"}}
@@ -637,7 +643,7 @@ def test_evidence_from_closeout_collect_maps_merged_pr() -> None:
     assert evidence["subject_head_sha"] == "931ce10e9dcd1e7e44a1980fc279c10db28aae94"
     assert evidence["resulting_base_sha"] == "32e999b4e611d2ad99d95442c53d760a196e2571"
     # merge した主体と、収集した主体は別の事実として持つ
-    assert evidence["actor"] == "say-yas"
+    assert evidence["actor"] == "example-merger"
     assert evidence["observed_by"] == "nexus-ai-2045"
     # merge 時刻は鮮度判定に使わない別項目へ
     assert evidence["subject_merged_at"] == "2026-08-06T07:39:04Z"
