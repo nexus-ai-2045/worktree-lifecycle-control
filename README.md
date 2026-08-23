@@ -2,27 +2,15 @@
 
 Git worktree を「増えたフォルダ」ではなく、所有者・タスク・期限・統合証跡を持つ期限付き作業資産として管理するためのローカル制御ツールです。
 
-## 目的
+[![CI](https://github.com/nexus-ai-2045/worktree-lifecycle-control/actions/workflows/ci.yml/badge.svg)](https://github.com/nexus-ai-2045/worktree-lifecycle-control/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nexus-ai-2045/worktree-lifecycle-control?sort=semver)](https://github.com/nexus-ai-2045/worktree-lifecycle-control/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
-- **git が守るものを二重に守らない。git が守らないものだけを守る。**
-- 経過日数は通知条件であり、削除条件にしない。
-- worktree、branch、task、PRを別の対象として扱う。フォルダを消しても branch は残る。
-- `cleanup_candidate` は削除ではなく、人間レビュー用候補を意味する。
-- 通常フローでは `--force` を使わない。
-- Gitの機械可読形式 `git worktree list --porcelain -z` を使う。
+## 目的 — git が守らない 1 行だけを守る
 
-判定モデルの根拠と、v2 から反転した理由は
-[ADR 0002](docs/decisions/0002-protect-what-git-does-not.md) にあります。
-
-## できること
-
-この CLI は read-only の棚卸しと、人間レビュー用の cleanup 候補判定までを行います。
-
-- `scan`: worktree ごとの disposition / blockers / review_signals を JSON で出す
-- `review-packet`: 削除を実行せず、人間レビュー用 packet を出す
-- `evidence-from-closeout`: 既存の closeout collector 出力を統合証跡へ正規化する
-
-## 何から守るのか
+> detached HEAD の worktree を消すと、その commit は無警告で消え、`git gc` の後は戻せません。
+> git が唯一守らないのがこの 1 行です。
 
 worktree を削除しても、多くの場合なにも失われません。branch が残るからです。
 隔離 repo での対照実験 (CI が `tests/test_reachability.py` で毎回再現) の結果:
@@ -41,34 +29,31 @@ worktree を削除しても、多くの場合なにも失われません。branc
 git branch rescue/<name> <head-sha>
 ```
 
-## 判定
+### 設計方針
 
-危険条件は一つの状態へ潰さず、`blockers[]`へ同時に保持します。削除を止めない情報は
-`review_signals[]`へ分けます。その上で、操作可否だけを`disposition`へ集約します。
+- **git が守るものを二重に守らない。git が守らないものだけを守る。**
+- 経過日数は通知条件であり、削除条件にしない。
+- worktree、branch、task、PRを別の対象として扱う。フォルダを消しても branch は残る。
+- `cleanup_candidate` は削除ではなく、人間レビュー用候補を意味する。
+- 通常フローでは `--force` を使わない。
+- Gitの機械可読形式 `git worktree list --porcelain -z` を使う。
 
-| disposition | 意味 |
+判定モデルの根拠と、v2 から反転した理由は
+[ADR 0002](docs/decisions/0002-protect-what-git-does-not.md) にあります。
+
+## できること
+
+この CLI は read-only の棚卸しと、人間レビュー用の cleanup 候補判定までを行います。
+
+| コマンド | 何をするか |
 | --- | --- |
-| `active` | 台帳で作業中と宣言されている |
-| `protected` | 削除を止める条件あり (到達不能・dirty・lock・primary・pin) |
-| `review_required` | 台帳に宣言があるのに壊れている |
-| `cleanup_candidate` | blockerなし。人間レビュー候補 |
-| `orphan_unknown` | path不在など実体不明 |
-
-`blockers[]` に載るのは次だけです。
-
-| blocker | 理由 |
-| --- | --- |
-| `head_becomes_unreachable` | 削除すると HEAD が unreachable になる。git は守らない |
-| `dirty_worktree` / `worktree_locked` | git 自身が削除を拒否する |
-| `primary_worktree` | そもそも削除できない |
-| `pinned` | 人が台帳で明示保護した。git から導出できない唯一の条件 |
-| `path_missing` / `git_status_unknown` / `head_reachability_unknown` | 測定できなかった |
-| `unknown_ignored_content` | Git が無視する内容のうち、明示した再生成可能 allowlist 外のものがある |
-
-統合状態・未 push commit・owner 不明・台帳の記入漏れは `review_signals[]` に出ます。
-判断材料ですが、削除を止めません。
+| `scan` | worktree ごとの disposition / blockers / review_signals を JSON で出す |
+| `review-packet` | 削除を実行せず、人間レビュー用 packet を出す |
+| `evidence-from-closeout` | 既存の closeout collector 出力を統合証跡へ正規化する |
 
 ## クイックスタート
+
+必要なのは Python 3.11+ と、対象 repo のパスだけです。台帳 (registry) は任意です。
 
 ```powershell
 python -m worktree_lifecycle_control scan `
@@ -110,6 +95,46 @@ python path\to\post_merge_closeout_report.py collect `
 ```powershell
 gh pr view 1 --repo owner/name --json mergedBy --jq .mergedBy.login
 ```
+
+## 判定
+
+危険条件は一つの状態へ潰さず、`blockers[]`へ同時に保持します。削除を止めない情報は
+`review_signals[]`へ分けます。その上で、操作可否だけを`disposition`へ集約します。
+
+```mermaid
+flowchart TD
+    START(["worktree を 1 件ずつ判定する"]) --> MEASURE{"実体を測れたか"}
+    MEASURE -->|測れない| ORPHAN["orphan_unknown / path不在など実体不明"]
+    MEASURE -->|測れた| DECLARED{"台帳で作業中と宣言されているか"}
+    DECLARED -->|宣言あり| ACTIVE["active / 作業中"]
+    DECLARED -->|宣言なし| BLOCKED{"削除を止める条件があるか"}
+    BLOCKED -->|条件あり| PROTECTED["protected / 到達不能・dirty・lock・primary・pin"]
+    BLOCKED -->|条件なし| BROKEN{"台帳の宣言が壊れていないか"}
+    BROKEN -->|壊れている| REVIEW["review_required / 台帳を直す"]
+    BROKEN -->|問題なし| CANDIDATE["cleanup_candidate / 人間レビュー候補"]
+```
+
+| disposition | 意味 |
+| --- | --- |
+| `active` | 台帳で作業中と宣言されている |
+| `protected` | 削除を止める条件あり (到達不能・dirty・lock・primary・pin) |
+| `review_required` | 台帳に宣言があるのに壊れている |
+| `cleanup_candidate` | blockerなし。人間レビュー候補 |
+| `orphan_unknown` | path不在など実体不明 |
+
+`blockers[]` に載るのは次だけです。
+
+| blocker | 理由 |
+| --- | --- |
+| `head_becomes_unreachable` | 削除すると HEAD が unreachable になる。git は守らない |
+| `dirty_worktree` / `worktree_locked` | git 自身が削除を拒否する |
+| `primary_worktree` | そもそも削除できない |
+| `pinned` | 人が台帳で明示保護した。git から導出できない唯一の条件 |
+| `path_missing` / `git_status_unknown` / `head_reachability_unknown` | 測定できなかった |
+| `unknown_ignored_content` | Git が無視する内容のうち、明示した再生成可能 allowlist 外のものがある |
+
+統合状態・未 push commit・owner 不明・台帳の記入漏れは `review_signals[]` に出ます。
+判断材料ですが、削除を止めません。
 
 ## 統合証跡 (任意)
 
