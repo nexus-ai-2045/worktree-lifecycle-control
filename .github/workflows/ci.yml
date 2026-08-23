@@ -52,15 +52,20 @@ jobs:
               schemas[path.name] = schema
 
           checker = FormatChecker()
+          # format 検査は依存が無いと黙って no-op になる。date-time が実際に
+          # 効いていることを先に確かめる。ここが通らない限り以降の検証は無意味。
+          assert not checker.conforms("not-a-timestamp", "date-time"), (
+              "date-time format checking is a no-op; rfc3339-validator is missing"
+          )
           example = json.loads(Path("registry.example.json").read_text(encoding="utf-8"))
-          Draft202012Validator(schemas["registry-v1.schema.json"], registry=registry, format_checker=checker).validate(example)
+          Draft202012Validator(schemas["registry-v2.schema.json"], registry=registry, format_checker=checker).validate(example)
           with tempfile.TemporaryDirectory() as temporary:
               root = Path(temporary)
               scan_path = root / "scan.json"
               review_path = root / "review.json"
               assert main(["scan", "--repo", ".", "--registry", "registry.example.json", "--report-path", str(scan_path), "--json"]) == 0
               assert main(["review-packet", "--repo", ".", "--registry", "registry.example.json", "--report-path", str(review_path), "--json"]) == 0
-              for payload_path, schema_name in ((scan_path, "scan-report-v2.schema.json"), (review_path, "review-packet-v2.schema.json")):
+              for payload_path, schema_name in ((scan_path, "scan-report-v3.schema.json"), (review_path, "review-packet-v3.schema.json")):
                   payload = json.loads(payload_path.read_text(encoding="utf-8"))
                   Draft202012Validator(schemas[schema_name], registry=registry, format_checker=checker).validate(payload)
       - name: Compile package

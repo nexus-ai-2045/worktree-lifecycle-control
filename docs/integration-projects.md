@@ -4,9 +4,9 @@
 
 1. Git nativeのread-only scanでworktreeを観測する。
 2. 既存の `shared/scripts/post_merge_closeout_report.py collect` で PR merge 証跡を取得する（本repoは取得を再実装しない）。
-3. `python -m worktree_lifecycle_control evidence-from-closeout` が collect JSON を `integration-evidence-v2` へ正規化する。
+3. `python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account>` が観測時刻付き collect JSON を `integration-evidence-v3` へ正規化する。collector が `mergedBy` を返さない間は `--actor` が必須で、省略時は fail-closed で失敗する。公開済みの v1 / v2 schema は互換性維持のため残し、変更しない。
 4. coreがexact `subject_head_sha`、`resulting_base_sha`、provider record、actor、観測時刻を検証する。
-5. report v2とreview packet v2が、各recordの`observations`、`blockers`、`review_signals`、`disposition`を提示する。
+5. report v3とreview packet v3が、各recordの`observations`、`blockers`、`review_signals`、`disposition`を提示する。
 6. 人間が対象と操作を承認した後だけ、既存の `shared/scripts/post_merge_cleanup.py` を executor として呼ぶ（削除ロジックは再実装しない）。
 
 ## 責務境界

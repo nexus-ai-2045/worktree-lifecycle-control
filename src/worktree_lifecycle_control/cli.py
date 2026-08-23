@@ -14,7 +14,13 @@ from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 from .closeout_adapter import CloseoutAdapterError, evidence_from_closeout_collect
-from .evidence import validate_integration_evidence
+from .evidence import validate_integration_evidence, validate_integration_shape
+from .reachability import (
+    branch_integration,
+    head_reachability,
+    resolve_base_ref,
+    run_git,
+)
 
 
 def configure_stdio() -> None:
@@ -66,6 +72,10 @@ class WorktreeRecord:
     days_until_review: int | None
     overdue_days: int
     lifecycle_status: str | None
+    detached: bool
+    head_reachable_elsewhere: bool | None
+    integration_state: str
+    pinned: bool
     integration_status: str
     integration_evidence_valid: bool
     integration_evidence_errors: tuple[str, ...]
@@ -82,14 +92,6 @@ class LifecycleAssessment:
     blockers: tuple[str, ...]
     review_signals: tuple[str, ...]
     disposition: str
-
-
-def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        check=False,
-    )
 
 
 def decode_path(value: bytes) -> str:
@@ -130,21 +132,136 @@ def parse_porcelain_z(raw: bytes) -> list[dict[str, Any]]:
 
 
 def normalize_path(path: str) -> str:
-    return str(Path(path).resolve()).casefold()
+    """比較用にパスを正規化する。
+
+    大小同一視は `os.path.normcase` に委ねる。Windows では小文字化し、
+    大小を区別するファイルシステムでは何もしない。無条件の `casefold()` は
+    Linux 上で `/srv/Foo` と `/srv/foo` という別の worktree を同一視し、
+    台帳エントリを取り違える。
+    """
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+SCAN_SCHEMA_VERSION = "worktree-lifecycle-report/v3"
+REVIEW_SCHEMA_VERSION = "worktree-lifecycle-review/v3"
+
+MEASUREMENT_UNKNOWN_BLOCKERS = frozenset(
+    {
+        "path_missing",
+        "git_status_unknown",
+        "head_reachability_unknown",
+        "ignored_content_measurement_unknown",
+    }
+)
+"""判定に効く事実を測れなかった blocker。台帳の記入漏れはここに含めない。"""
+
+
+class RegistryError(ValueError):
+    """台帳そのものが読めない・契約に合わない。scan を続けない。"""
+
+
+REGISTRY_SCHEMA_VERSION = "worktree-lifecycle/v2"
+
+REGISTRY_ENTRY_FIELDS = frozenset(
+    {"pin", "reason", "expires_at", "return_path", "lifecycle_status", "note",
+     "owner", "task", "created_at", "context_saved", "integration"}
+)
+REGISTRY_FIELDS = frozenset({"schema_version", "soft_budget_per_repo", "entries"})
+INTEGRATION_EVIDENCE_FIELDS = frozenset(
+    {"status", "provider", "evidence_type", "provider_record_id", "subject_head_sha",
+     "resulting_base_sha", "actor", "observed_at", "subject_merged_at", "observed_by"}
+)
+
+# 内容ではなく、生成元が明確な名前だけを許可する。広い glob は新しい成果物を
+# 誤って再生成可能扱いするため追加しない。
+REGENERATABLE_IGNORED_PARTS = frozenset(
+    {".pytest_cache", ".pytest-tmp", "__pycache__", ".venv"}
+)
 
 
 def load_registry(path: Path | None) -> dict[str, Any]:
+    """台帳を読む。台帳は任意であり、無くても scan は成立する。
+
+    v1 は「登録が無ければ削除候補にしない」許可リストだった。登録されない限り
+    何も提案できないため、実運用では 63 worktree に対して候補 0 件になった (実測)。
+    v2 では全項目を任意にし、台帳は「これは残す」という人の意思だけを書く保護
+    リストにする。git から導出できる事実 (owner / 統合状態 / dirty) は台帳に
+    持たせない。導出できるものを保存すると、その瞬間から drift が始まる。
+    """
     if path is None:
-        return {"schema_version": "worktree-lifecycle/v1", "entries": {}}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if payload.get("schema_version") != "worktree-lifecycle/v1":
-        raise ValueError("unsupported registry schema_version")
+        return {"schema_version": REGISTRY_SCHEMA_VERSION, "entries": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RegistryError(f"registry could not be read: {error}") from error
+    version = payload.get("schema_version")
+    if version != REGISTRY_SCHEMA_VERSION:
+        raise RegistryError(
+            f"unsupported registry schema_version {version!r}; expected {REGISTRY_SCHEMA_VERSION!r}"
+        )
     if not isinstance(payload.get("entries"), dict):
-        raise ValueError("registry entries must be an object")
+        raise RegistryError("registry entries must be an object")
+    malformed_entries = [
+        str(path)
+        for path, entry in payload["entries"].items()
+        if not isinstance(entry, dict)
+    ]
+    if malformed_entries:
+        raise RegistryError(
+            f"registry entry must be an object: {malformed_entries[0]}"
+        )
+    unknown_fields = sorted(set(payload) - REGISTRY_FIELDS)
+    if unknown_fields:
+        raise RegistryError(f"unknown registry field: {unknown_fields[0]}")
     soft_budget = payload.get("soft_budget_per_repo", 3)
     if not isinstance(soft_budget, int) or isinstance(soft_budget, bool) or soft_budget < 1:
-        raise ValueError("soft_budget_per_repo must be an integer greater than zero")
+        raise RegistryError("soft_budget_per_repo must be an integer greater than zero")
     return payload
+
+
+def validate_entry(entry: dict[str, Any]) -> list[str]:
+    """台帳エントリの型を検査する。全項目任意だが、書いたなら正しくあること。
+
+    `null` は「書いていない」ではなく「書いてあるが空」として扱い、拒否する。
+    v1 は `value is not None and ...` という条件だったため、`"task": null` が
+    検査を素通りし、必須項目が空のまま候補へ昇格できた。
+    """
+    errors: list[str] = []
+    errors.extend(
+        f"unknown registry field: {field}" for field in sorted(set(entry) - REGISTRY_ENTRY_FIELDS)
+    )
+    for text_field in ("owner", "task", "return_path", "reason", "note"):
+        if text_field not in entry:
+            continue
+        value = entry[text_field]
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{text_field} must be a non-empty string")
+    for bool_field in ("pin", "context_saved"):
+        if bool_field in entry and not isinstance(entry[bool_field], bool):
+            errors.append(f"{bool_field} must be a boolean")
+    lifecycle = entry.get("lifecycle_status")
+    if "lifecycle_status" in entry and (
+        not isinstance(lifecycle, str)
+        or lifecycle not in {"active", "paused", "complete", "unknown"}
+    ):
+        errors.append("lifecycle_status is unsupported")
+    integration = entry.get("integration")
+    if "integration" in entry and not isinstance(integration, dict):
+        errors.append("integration must be an object")
+    elif isinstance(integration, dict):
+        unknown_integration = sorted(set(integration) - INTEGRATION_EVIDENCE_FIELDS)
+        errors.extend(
+            f"unknown integration field: {field}" for field in unknown_integration
+        )
+        errors.extend(validate_integration_shape(integration))
+    for stamp_field in ("created_at", "expires_at"):
+        if stamp_field not in entry:
+            continue
+        try:
+            parse_deadline(entry[stamp_field])
+        except (TypeError, ValueError) as error:
+            errors.append(str(error).replace("expires_at", stamp_field))
+    return errors
 
 
 def registry_index(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -153,6 +270,62 @@ def registry_index(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
         for path, entry in registry.get("entries", {}).items()
         if isinstance(entry, dict)
     }
+
+
+def registry_match_for_path(
+    registry: dict[str, Any], path_text: str
+) -> tuple[dict[str, Any], bool]:
+    """台帳エントリを実体同一性で解決し、(内容, 一致したか) を返す。
+
+    内容と一致有無を分けて返す。v2 schema は中身の無いエントリ `{}` を明示的に
+    許すため、`bool(entry)` では「鍵はあるが空」と「鍵が無い」を区別できず、
+    登録済みの worktree を未登録として数えていた。
+
+    不確実性の扱いも「問い合わせ対象を測れなかった時」だけに限る。台帳側の
+    1 件が消えているだけで repo 全体を不確実にすると、腐った 1 行が全 worktree
+    を review_required に落とし、削除候補が永久に 0 件になる。
+    """
+    entries = registry.get("entries", {})
+    indexed = registry_index(registry)
+    exact = indexed.get(normalize_path(path_text))
+    if exact is not None:
+        return exact, True
+    if sys.platform != "darwin":
+        return {}, False
+    # macOS の normcase は POSIX 実装なので、大小を区別しない APFS 上でも
+    # 何もしない。ここだけは実体 (inode) で突き合わせる。
+    # 対象そのものを測れないなら、どの台帳エントリとも同一性を判定できない。
+    if not _path_is_measurable(path_text):
+        return {"_path_identity_unknown": True}, False
+    for registered_path, entry in entries.items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            if os.path.samefile(path_text, registered_path):
+                return entry, True
+        except OSError:
+            # 辿れないのは台帳側のパスである (問い合わせ対象は直前に測れている)。
+            # 辿れないパスが対象と同一実体であることはないので、この 1 件だけを
+            # 飛ばす。ただし走査中に対象が消えた可能性はあるため測り直し、
+            # 消えていればそこで不確実へ倒す。
+            if not _path_is_measurable(path_text):
+                return {"_path_identity_unknown": True}, False
+    return {}, False
+
+
+def _path_is_measurable(path_text: str) -> bool:
+    try:
+        os.stat(path_text)
+    except OSError:
+        return False
+    return True
+
+
+def registry_entry_for_path(
+    registry: dict[str, Any], path_text: str
+) -> dict[str, Any]:
+    """Resolve a registry entry by filesystem identity, failing safe on uncertainty."""
+    return registry_match_for_path(registry, path_text)[0]
 
 
 def count_unpushed(path: Path) -> int | None:
@@ -175,6 +348,40 @@ def git_common_dir(repo: Path) -> str:
 def is_dirty(path: Path) -> bool | None:
     proc = run_git(path, "status", "--porcelain=v1", "--untracked-files=normal")
     return None if proc.returncode != 0 else bool(proc.stdout)
+
+
+def ignored_paths(path: Path) -> tuple[str, ...] | None:
+    proc = run_git(
+        path,
+        "status",
+        "--porcelain=v1",
+        "--ignored=matching",
+        "--untracked-files=all",
+        "-z",
+    )
+    if proc.returncode != 0:
+        return None
+    result: list[str] = []
+    for token in proc.stdout.split(b"\0"):
+        if token.startswith(b"!! "):
+            result.append(token[3:].decode("utf-8", errors="surrogateescape"))
+    return tuple(result)
+
+
+def classify_ignored_paths(paths: Sequence[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    allowed: list[str] = []
+    unknown: list[str] = []
+    for path in paths:
+        path_for_parts = path.replace("\\", "/") if sys.platform == "win32" else path
+        parts = tuple(
+            part for part in path_for_parts.strip("/").split("/") if part
+        )
+        regeneratable = any(
+            part in REGENERATABLE_IGNORED_PARTS or part.endswith(".egg-info") for part in parts
+        )
+        target = allowed if regeneratable else unknown
+        target.append(path)
+    return tuple(allowed), tuple(unknown)
 
 
 def head_committer_at(path: Path) -> str | None:
@@ -251,93 +458,128 @@ def assess_lifecycle(
     entry: dict[str, Any],
     now: datetime,
     primary: bool = False,
+    reachable: bool | None = None,
+    integration_state: str = "unknown",
+    detached: bool = False,
+    unknown_ignored_paths: Sequence[str] = (),
+    ignored_measurement_failed: bool = False,
+    registered: bool | None = None,
 ) -> LifecycleAssessment:
+    """worktree 1 件を評価する。
+
+    blocker は「このフォルダを消すと何かが失われる、または git が消させない」条件だけに
+    限定する。それ以外は signal (人が見る情報) に置く。両者を混ぜると、危険でないものが
+    危険と同じ重さで並び、本当に危険な 1 件が 62 件の雑音に埋もれる。
+
+    blocker と signal の切り分けは 2026-08-15 の隔離実験に基づく。詳細は
+    docs/decisions/0002-protect-what-git-does-not.md を参照。
+    """
     integration_value = entry.get("integration")
     integration = integration_value if isinstance(integration_value, dict) else {}
     integration_validation = validate_integration_evidence(integration, head, now=now)
-    integration_verified = integration_validation.verified
     owner = entry.get("owner")
     lifecycle = entry.get("lifecycle_status")
+    pinned = entry.get("pin") is True
     context_saved = entry.get("context_saved") is True
-    registry_errors: list[str] = []
-    for required in ("owner", "task", "return_path", "lifecycle_status", "integration", "context_saved"):
-        if required not in entry:
-            registry_errors.append(f"{required} is required")
-    for text_field in ("owner", "task", "return_path"):
-        value = entry.get(text_field)
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            registry_errors.append(f"{text_field} must be a non-empty string")
-    if integration_value is not None and not isinstance(integration_value, dict):
-        registry_errors.append("integration must be an object")
-    if "context_saved" in entry and not isinstance(entry.get("context_saved"), bool):
-        registry_errors.append("context_saved must be a boolean")
-    if lifecycle is not None and (
-        not isinstance(lifecycle, str)
-        or lifecycle not in {"active", "paused", "complete", "unknown"}
-    ):
-        registry_errors.append("lifecycle_status is unsupported")
+    registry_errors = validate_entry(entry)
+    # 台帳に鍵があるかどうかは、中身の有無とは別の事実。空エントリ `{}` は
+    # schema 上正当な「登録済み・宣言なし」であり、未登録として数えない。
+    is_registered = bool(entry) if registered is None else registered
     try:
         deadline = parse_deadline(entry.get("expires_at"))
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError):
         deadline = None
-        registry_errors.append(str(error))
-    try:
-        parse_deadline(entry.get("created_at"))
-    except (TypeError, ValueError) as error:
-        registry_errors.append(str(error).replace("expires_at", "created_at"))
+
     observations = {
         "path_exists": exists,
         "dirty": dirty,
         "unpushed_commits": unpushed,
         "git_locked": locked,
+        "detached_head": detached,
+        "head_reachable_elsewhere": reachable,
+        "integration_state": integration_state,
         "owner": owner,
         "lifecycle_status": lifecycle,
+        "pinned": pinned,
         "integration_status": integration.get("status", "unknown"),
-        "integration_evidence_valid": integration_verified,
+        "integration_evidence_valid": integration_validation.verified,
         "context_saved": context_saved,
         "registry_errors": registry_errors,
+        "registered": is_registered,
         "primary_worktree": primary,
+        "unknown_ignored_paths": list(unknown_ignored_paths),
+        "ignored_measurement_failed": ignored_measurement_failed,
     }
+
     blockers: list[str] = []
     signals: list[str] = []
+
+    # --- blocker: 測定できない ---------------------------------------------
     if not exists:
         blockers.append("path_missing")
     if dirty is None:
         blockers.append("git_status_unknown")
-    elif dirty:
+    if reachable is None:
+        blockers.append("head_reachability_unknown")
+
+    # --- blocker: 消すと失われる / git が消させない -------------------------
+    if reachable is False:
+        # git は detached HEAD の worktree を無警告で削除し、gc で commit を失う。
+        # git が守らない唯一の経路であり、このツールの中核的な存在理由。
+        blockers.append("head_becomes_unreachable")
+    if dirty:
+        # git worktree remove 自身が拒否する。ここでの blocker は重複だが、
+        # 「実行しても弾かれる」ことを候補一覧の段階で示すために残す。
         blockers.append("dirty_worktree")
-    if unpushed is None:
-        blockers.append("remote_reachability_unknown")
-    elif unpushed > 0 and not integration_verified:
-        blockers.append("unpushed_commits")
-    if not owner:
-        blockers.append("owner_unknown")
-    if registry_errors:
-        blockers.append("registry_invalid")
     if locked:
         blockers.append("worktree_locked")
     if primary:
         blockers.append("primary_worktree")
-    if integration.get("status") == "verified" and integration_validation.errors:
-        blockers.append("integration_evidence_invalid")
-    elif not integration_verified:
-        blockers.append("integration_unverified")
-    if not context_saved:
-        blockers.append("context_not_saved")
+    if pinned:
+        # 人が明示した保護。git からは導出できない唯一の blocker。
+        blockers.append("pinned")
+    if unknown_ignored_paths:
+        blockers.append("unknown_ignored_content")
+    if ignored_measurement_failed:
+        blockers.append("ignored_content_measurement_unknown")
+
+    # --- signal: 判断材料。削除を止めない -----------------------------------
+    if detached:
+        signals.append("detached_head")
+    if unpushed is None:
+        signals.append("remote_reachability_unknown")
+    elif unpushed > 0:
+        # branch は worktree 削除後も残るため、commit は失われない (実測)。
+        signals.append("unpushed_commits")
+    if integration_state == "not_integrated":
+        signals.append("branch_not_integrated")
+    elif integration_state == "unknown":
+        signals.append("branch_integration_unknown")
+    if not owner:
+        signals.append("owner_unknown")
     if lifecycle == "active":
         signals.append("lifecycle_active")
-    elif lifecycle != "complete":
-        blockers.append("lifecycle_not_complete")
+    if is_registered and not context_saved:
+        signals.append("context_not_saved")
+    if integration.get("status") == "verified" and integration_validation.errors:
+        signals.append("integration_evidence_invalid")
+    if registry_errors:
+        signals.append("registry_invalid")
     if deadline is not None and deadline <= now:
         signals.append("review_deadline_reached")
+    if unknown_ignored_paths:
+        signals.append("unknown_ignored_content")
+    if ignored_measurement_failed:
+        signals.append("ignored_content_measurement_unknown")
 
     if "path_missing" in blockers or "git_status_unknown" in blockers:
         disposition = "orphan_unknown"
     elif lifecycle == "active":
         disposition = "active"
-    elif any(item in blockers for item in ("dirty_worktree", "unpushed_commits", "worktree_locked")):
-        disposition = "protected"
     elif blockers:
+        disposition = "protected"
+    elif registry_errors:
+        # 台帳に宣言があるのに壊れている。宣言が無い場合と区別する。
         disposition = "review_required"
     else:
         disposition = "cleanup_candidate"
@@ -348,15 +590,23 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
     proc = run_git(repo, "worktree", "list", "--porcelain", "-z")
     if proc.returncode != 0:
         raise RuntimeError(f"git worktree list failed for {repo}")
-    entries = registry_index(registry)
+    # base ref の解決は repo 単位で 1 回。worktree ごとに引くと 66 回 git を呼ぶ。
+    base_ref = resolve_base_ref(repo)
     result: list[WorktreeRecord] = []
     for index, raw in enumerate(parse_porcelain_z(proc.stdout)):
         path_text = raw["path"]
         path = Path(path_text)
         exists = path.exists()
-        entry = entries.get(normalize_path(path_text), {})
+        entry, registered = registry_match_for_path(registry, path_text)
         dirty = is_dirty(path) if exists else None
+        ignored = ignored_paths(path) if exists else None
+        ignored_allowed, ignored_unknown = classify_ignored_paths(ignored or ())
         unpushed = count_unpushed(path) if exists else None
+        head_sha = raw.get("head")
+        detached = bool(raw.get("detached"))
+        # 到達性と統合状態は repo 側の ref を見る。worktree が消えていても評価できる。
+        reachable = head_reachability(repo, head_sha)
+        integration_state = branch_integration(repo, head_sha, base_ref)
         commit_at = head_committer_at(path) if exists else None
         created_at = entry.get("created_at")
         expires_at = entry.get("expires_at")
@@ -371,11 +621,18 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             dirty=dirty,
             unpushed=unpushed,
             locked=bool(raw.get("locked")),
-            head=raw.get("head"),
+            head=head_sha,
             entry=entry,
             now=now,
             primary=index == 0,
+            reachable=reachable,
+            integration_state=integration_state,
+            detached=detached,
+            unknown_ignored_paths=(ignored_unknown if ignored is not None else ("<measurement-failed>",)),
+            ignored_measurement_failed=ignored is None and exists,
+            registered=registered,
         )
+        assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
         integration_value = entry.get("integration")
         integration = integration_value if isinstance(integration_value, dict) else {}
         integration_validation = validate_integration_evidence(integration, raw.get("head"), now=now)
@@ -401,6 +658,10 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
                 days_until_review=days_until_review,
                 overdue_days=overdue_days,
                 lifecycle_status=entry.get("lifecycle_status"),
+                detached=detached,
+                head_reachable_elsewhere=reachable,
+                integration_state=integration_state,
+                pinned=entry.get("pin") is True,
                 integration_status=integration.get("status", "unknown"),
                 integration_evidence_valid=integration_validation.verified,
                 integration_evidence_errors=integration_validation.errors,
@@ -429,7 +690,7 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--json", action="store_true")
     evidence = subparsers.add_parser(
         "evidence-from-closeout",
-        help="normalize post_merge_closeout_report collect JSON into integration-evidence-v2",
+        help="normalize post_merge_closeout_report collect JSON into integration-evidence-v3",
     )
     evidence.add_argument(
         "--input",
@@ -445,6 +706,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-gh-enrich",
         action="store_true",
         help="do not call gh to fill missing subject_head_sha",
+    )
+    evidence.add_argument(
+        "--actor",
+        help=(
+            "統合を実行した主体。closeout collect が mergedBy を返さないため、"
+            "上流が返すまではここで明示する"
+        ),
     )
     evidence.add_argument("--json", action="store_true", help="print evidence JSON to stdout")
     return parser
@@ -489,16 +757,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 payload,
                 subject_head_sha=args.subject_head_sha,
                 allow_gh_enrich=not args.no_gh_enrich,
+                actor=args.actor,
             )
         except (OSError, json.JSONDecodeError, CloseoutAdapterError) as exc:
             emit(f"error: {exc}")
             return 2
-        rendered = json.dumps(evidence, ensure_ascii=False, indent=2)
+        rendered = json.dumps(evidence, ensure_ascii=True, indent=2)
         if args.output is not None:
             write_json_atomic(args.output, rendered)
         if args.json or args.output is None:
             emit(rendered)
         return 0
+    try:
+        return run_inventory(args)
+    except (RegistryError, RuntimeError, OSError, ValueError) as error:
+        # 生 traceback を出さない。CLI の失敗は 1 行の理由と exit code で伝える。
+        emit(f"error: {error}")
+        return 2
+
+
+def run_inventory(args: argparse.Namespace) -> int:
     unique_repos: list[Path] = []
     seen_repos: set[str] = set()
     for repo in args.repo:
@@ -527,22 +805,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "action": "review_only",
                 }
             )
+    # 測定不能 = 判定に効く事実が取れなかったもの。台帳に書いていないことは
+    # 測定失敗ではない。v2 では「台帳未登録」を測定不能に数えていたため、台帳が
+    # 空の repo では常に measurement_status=partial となり、本物の測定失敗を隠した。
     unknown_count = sum(
-        any(
-            blocker in {
-                "path_missing",
-                "git_status_unknown",
-                "remote_reachability_unknown",
-                "owner_unknown",
-                "integration_unverified",
-                "registry_invalid",
-            }
-            for blocker in record.blockers
-        )
+        any(blocker in MEASUREMENT_UNKNOWN_BLOCKERS for blocker in record.blockers)
         for record in records
     )
+    danger_count = sum("head_becomes_unreachable" in record.blockers for record in records)
+    registered_count = sum(bool(record.observations.get("registered")) for record in records)
     scan_payload = {
-        "schema_version": "worktree-lifecycle-report/v2",
+        "schema_version": SCAN_SCHEMA_VERSION,
         "run_id": str(uuid4()),
         "observed_at": now.isoformat(),
         "action": "scan",
@@ -552,8 +825,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "scan_completed": True,
         "measurement_status": "partial" if unknown_count else "complete",
         "unknown_count": unknown_count,
+        "danger_count": danger_count,
+        "registry_coverage": {
+            "registered": registered_count,
+            "total": len(records),
+        },
         "registry_validation_status": (
-            "partial" if any("registry_invalid" in record.blockers for record in records) else "valid"
+            "partial"
+            if any("registry_invalid" in record.review_signals for record in records)
+            else "valid"
         ),
         "read_only": True,
         "soft_budget": soft_budget,
@@ -566,7 +846,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         candidates = [record for record in records if record.disposition == "cleanup_candidate"]
         protected = [record for record in records if record.disposition != "cleanup_candidate"]
         payload = {
-            "schema_version": "worktree-lifecycle-review/v2",
+            "schema_version": REVIEW_SCHEMA_VERSION,
             "run_id": scan_payload["run_id"],
             "recorded_at": now.isoformat(),
             "recorded_by": "worktree-lifecycle-control",
@@ -607,12 +887,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         }
     else:
         payload = scan_payload
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    rendered = json.dumps(payload, ensure_ascii=True, indent=2)
     if args.report_path:
         write_json_atomic(args.report_path, rendered)
     if args.json:
         emit(rendered)
     else:
+        counts: dict[str, int] = {}
+        for record in records:
+            counts[record.disposition] = counts.get(record.disposition, 0) + 1
+        emit(
+            "合計 {total} / 削除候補 {c} / 保護 {p} / 要確認 {r} / 作業中 {a} / 実体不明 {o}".format(
+                total=len(records),
+                c=counts.get("cleanup_candidate", 0),
+                p=counts.get("protected", 0),
+                r=counts.get("review_required", 0),
+                a=counts.get("active", 0),
+                o=counts.get("orphan_unknown", 0),
+            )
+        )
+        if danger_count:
+            emit(
+                f"警告: {danger_count} 件は HEAD がどの branch/tag/remote からも到達できません。"
+                "git は無警告で削除し、gc 後に commit を復元できません。"
+            )
+        emit("")
         for record in records:
             emit(f"{record.disposition:28} {record.path}")
             emit(f"  {human_day_summary(record)}")
