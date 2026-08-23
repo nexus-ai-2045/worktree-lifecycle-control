@@ -26,6 +26,7 @@ visibility は既に public です。これ以上の visibility 変更はしま�
 - [x] GitHub の Private vulnerability reporting: enabled
 - [x] CodeQL default setup: configured
 - [x] ruleset `protect-main`: default branch 削除禁止 / force push 禁止 / squash のみ / 必須 CI / 最新 base / thread 解決
+- [x] PREFLIGHT.md を public 後の境界宣言に合わせた
 - [ ] 既存履歴 blob の個人ホームを模した test fixture。履歴 rewrite はしない方針
 
 ## 検査の限界
