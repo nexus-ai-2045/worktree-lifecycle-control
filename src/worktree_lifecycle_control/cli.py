@@ -13,6 +13,13 @@ from typing import Any, Sequence, TextIO
 from zoneinfo import ZoneInfo
 from uuid import uuid4
 
+from .checkout_health import (
+    BASELINE_SCHEMA_VERSION,
+    build_report,
+    find_leftover_worktree_dirs,
+    load_baseline,
+    probe_repo,
+)
 from .closeout_adapter import CloseoutAdapterError, evidence_from_closeout_collect
 from .evidence import validate_integration_evidence, validate_integration_shape
 from .reachability import (
@@ -716,6 +723,25 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     evidence.add_argument("--json", action="store_true", help="print evidence JSON to stdout")
+    health = subparsers.add_parser(
+        "health",
+        help="probe whether checkouts are measurable at all (git usable, no leftovers)",
+    )
+    health.add_argument("--repo", action="append", type=Path, required=True)
+    health.add_argument(
+        "--root",
+        action="append",
+        type=Path,
+        help="directory whose direct children are checked for leftover worktree dirs",
+    )
+    health.add_argument("--baseline", type=Path, help="ratchet baseline JSON path")
+    health.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="write current counts to --baseline instead of comparing",
+    )
+    health.add_argument("--report-path", type=Path)
+    health.add_argument("--json", action="store_true")
     return parser
 
 
@@ -770,11 +796,83 @@ def main(argv: Sequence[str] | None = None) -> int:
             emit(rendered)
         return 0
     try:
+        if args.command == "health":
+            return run_health_command(args)
         return run_inventory(args)
     except (RegistryError, RuntimeError, OSError, ValueError) as error:
         # 生 traceback を出さない。CLI の失敗は 1 行の理由と exit code で伝える。
         emit(f"error: {error}")
         return 2
+
+
+def run_health_command(args: argparse.Namespace) -> int:
+    """checkout health を測り、baseline があれば ratchet 判定する。
+
+    exit code 契約: 0 = ok / 1 = ratchet 後退 (baseline 超過) / 2 = 実行エラー。
+    baseline を指定したのに存在しない場合は、暗黙の全ゼロ基準で初回から赤に
+    しない。`--update-baseline` で明示的に作らせる。
+    """
+    now = datetime.now(ZoneInfo("Asia/Tokyo"))
+    repos = [probe_repo(repo) for repo in args.repo]
+    roots = list(args.root or [])
+    leftovers = tuple(
+        item for root in roots for item in find_leftover_worktree_dirs(root)
+    )
+    baseline: dict[str, int] | None = None
+    if args.baseline is not None and not args.update_baseline:
+        if not args.baseline.exists():
+            raise ValueError(
+                f"baseline not found: {args.baseline} (run once with --update-baseline)"
+            )
+        baseline = load_baseline(args.baseline)
+    report = build_report(
+        repos=repos,
+        leftovers=leftovers,
+        targets=[str(repo) for repo in args.repo],
+        roots=[str(root) for root in roots],
+        observed_at=now.isoformat(),
+        run_id=str(uuid4()),
+        baseline=baseline,
+    )
+    if args.baseline is not None and args.update_baseline:
+        write_json_atomic(
+            args.baseline,
+            json.dumps(
+                {
+                    "schema_version": BASELINE_SCHEMA_VERSION,
+                    "updated_at": now.isoformat(),
+                    "counts": report["counts"],
+                },
+                ensure_ascii=True,
+                indent=2,
+            ),
+        )
+        report["baseline_updated"] = str(args.baseline)
+    rendered = json.dumps(report, ensure_ascii=True, indent=2)
+    if args.report_path:
+        write_json_atomic(args.report_path, rendered)
+    if args.json:
+        emit(rendered)
+    else:
+        counts = report["counts"]
+        emit(
+            "所有権異常 {d} / git不能(他) {g} / prunable {p} / 残骸dir {l}".format(
+                d=counts["dubious_ownership"],
+                g=counts["git_unusable_other"],
+                p=counts["prunable_worktrees"],
+                l=counts["leftover_worktree_dirs"],
+            )
+        )
+        for key, hint in report["repair_hints"].items():
+            emit(f"  - {key}: {hint}")
+        ratchet = report.get("ratchet")
+        if ratchet and ratchet["regressions"]:
+            for regression in ratchet["regressions"]:
+                emit(f"  - 後退: {regression}")
+    ratchet = report.get("ratchet")
+    if ratchet is not None and not ratchet["ok"]:
+        return 1
+    return 0
 
 
 def run_inventory(args: argparse.Namespace) -> int:
