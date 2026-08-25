@@ -41,13 +41,13 @@ git branch rescue/<name> <head-sha>
 
 ## クイックスタート
 
-人間が pip や scan を叩く手順は置かない。次を AI にそのまま貼る。
+人間が pip や scan を叩く手順は置いていません。次をそのまま AI に貼ってね。
 
 ```text
-このリポジトリを読んで直して。先に危険レビューを出せ。
-削除・--force・GitHub write・visibility 変更・secret 露出・個人パスを実行していないか。
-cleanup_candidate を削除許可と読まない。unknown を安全と読まない。
-問題があればコードを書く前に止めろ。CONTRIBUTING を守れ。
+このリポジトリを読んで直してね。まず危険レビューから出してほしい。
+削除・--force・GitHub write・visibility 変更・secret 露出・個人パスをしていないか確かめて。
+cleanup_candidate は削除許可と読まないで。unknown も安全と読まないで。
+問題があればコードを書く前に止まってね。CONTRIBUTING を守ってね。
 
 https://github.com/nexus-ai-2045/worktree-lifecycle-control
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/README.md
@@ -56,7 +56,7 @@ https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/PREFLIGHT.md
 ```
 
-コマンド名は上の「できること」を見れば足りる。この CLI は消さない。
+コマンド名は上の「できること」を見てもらえば十分です。この CLI は消しません。
 ## 判定
 
 危険条件は一つの状態へ潰さず、`blockers[]` へ同時に保持します。削除を止めない情報は `review_signals[]` へ分けます。
