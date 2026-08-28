@@ -112,6 +112,11 @@ jobs:
               ;;
             push)
               BASE="$BEFORE_SHA"
+              # 新規ブランチ初回 push は before が all-zero。default branch へフォールバック。
+              if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+                git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
+                BASE="$(git rev-parse "origin/${{ github.event.repository.default_branch }}")"
+              fi
               ;;
             schedule)
               # 無変更 schedule でも腐敗検出経路を残す。直近親と比較。
