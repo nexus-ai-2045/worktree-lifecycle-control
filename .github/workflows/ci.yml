@@ -233,13 +233,17 @@ jobs:
           CONSISTENCY_BASE: ${{ steps.consistency.outputs.base_ref }}
         run: |
           set -euo pipefail
+          # shadow_findings / fail も JSON を出す。exit code は後で status を見て判定する。
+          set +e
           python "$RUNNER_TEMP/repo-preflight/scripts/consistency_gate.py" \
             --repo . \
             --base-ref "$CONSISTENCY_BASE" \
             --require-config \
             --require-mode shadow \
             --json > "$RUNNER_TEMP/consistency.json"
-          python - <<'PY'
+          gate_rc=$?
+          set -e
+          GATE_RC="$gate_rc" python - <<'PY'
           import json
           import os
           import pathlib
@@ -252,7 +256,10 @@ jobs:
           )
           status = payload.get("status")
           mode = payload.get("mode")
-          print(f"consistency_gate status={status!r} mode={mode!r}")
+          print(
+              f"consistency_gate status={status!r} mode={mode!r} "
+              f"cli_rc={os.environ.get('GATE_RC')!r}"
+          )
           print(json.dumps(payload, ensure_ascii=False, indent=2))
           # shadow: 所見は止めない。設定欠落・mode 弱体化・tool_error・enforce 相当 fail は止める。
           if status in {"pass", "shadow_findings"}:
