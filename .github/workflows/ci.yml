@@ -101,35 +101,44 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           BEFORE_SHA: ${{ github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           HEAD="$(git rev-parse HEAD)"
           BASE=""
+          REMOTE_REF=""
           case "$EVENT_NAME" in
             pull_request)
               BASE="$PR_BASE_SHA"
+              REMOTE_REF="origin/${PR_BASE_REF}"
+              git fetch --no-tags origin "$PR_BASE_REF"
               ;;
             push)
               BASE="$BEFORE_SHA"
+              REMOTE_REF="origin/${DEFAULT_BRANCH}"
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
               # 新規ブランチ初回 push は before が all-zero。default branch へフォールバック。
               if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-                git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
-                BASE="$(git rev-parse "origin/${{ github.event.repository.default_branch }}")"
+                BASE="$(git rev-parse "$REMOTE_REF")"
               fi
               ;;
             schedule)
               # 無変更 schedule でも腐敗検出経路を残す。直近親と比較。
               BASE="$(git rev-parse HEAD~1)"
+              REMOTE_REF="origin/${DEFAULT_BRANCH}"
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
               ;;
             workflow_dispatch)
+              REMOTE_REF="origin/${DEFAULT_BRANCH}"
+              git fetch --no-tags origin "$DEFAULT_BRANCH"
               if [ -n "${PR_BASE_SHA:-}" ]; then
                 BASE="$PR_BASE_SHA"
               elif [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
                 BASE="$BEFORE_SHA"
               else
-                git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
-                BASE="$(git rev-parse "origin/${{ github.event.repository.default_branch }}")"
+                BASE="$(git rev-parse "$REMOTE_REF")"
               fi
               ;;
             *)
@@ -147,8 +156,20 @@ jobs:
             echo "空diff fail-closed: workflow_dispatch で BASE==HEAD ($HEAD)" >&2
             exit 1
           fi
-          echo "base_ref=$BASE_RESOLVED" >> "$GITHUB_OUTPUT"
-          echo "Resolved consistency base_ref=$BASE_RESOLVED head=$HEAD event=$EVENT_NAME"
+          # readiness_scan の --consistency-base-ref は refs/remotes/origin/* が必要。
+          REMOTE_RESOLVED="$(git rev-parse --symbolic-full-name "$REMOTE_REF")"
+          case "$REMOTE_RESOLVED" in
+            refs/remotes/origin/*) ;;
+            *)
+              echo "remote symbolic ref が不正: $REMOTE_RESOLVED" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "base_ref=$BASE_RESOLVED"
+            echo "remote_ref=$REMOTE_REF"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved consistency base_ref=$BASE_RESOLVED remote_ref=$REMOTE_REF head=$HEAD event=$EVENT_NAME"
 
       - name: Fetch pinned repo-preflight (no logic copy)
         run: |
@@ -172,11 +193,21 @@ jobs:
         run: python -m ai_ratchet_gate --repo .
 
       - name: repo-preflight readiness_scan (evidence)
+        env:
+          CONSISTENCY_REMOTE_REF: ${{ steps.consistency.outputs.remote_ref }}
         run: |
           set -euo pipefail
+          # exit code は後で status を見て判定する（blocked=1 / tool_error=2 でも JSON は出す）
+          set +e
+          # --consistency-base-ref は publish/release か --release が必要。CI 証拠として --release を付ける。
           python "$RUNNER_TEMP/repo-preflight/scripts/readiness_scan.py" \
-            --repo . > "$RUNNER_TEMP/readiness.json"
-          python - <<'PY'
+            --repo . \
+            --release \
+            --consistency-base-ref "$CONSISTENCY_REMOTE_REF" \
+            > "$RUNNER_TEMP/readiness.json"
+          scan_rc=$?
+          set -e
+          SCAN_RC="$scan_rc" python - <<'PY'
           import json
           import os
           import pathlib
@@ -185,9 +216,15 @@ jobs:
           path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "readiness.json"
           payload = json.loads(path.read_text(encoding="utf-8"))
           status = payload.get("status")
-          print(f"readiness_scan status={status!r}")
+          print(f"readiness_scan status={status!r} cli_rc={os.environ.get('SCAN_RC')!r}")
+          consistency = (payload.get("checks") or {}).get("repository_consistency") or {}
+          print(
+              "repository_consistency="
+              f"{consistency.get('status')!r} mode={consistency.get('mode')!r}"
+          )
           # tool_error だけ fail-closed。blocked/pass は証拠として残し、merge 承認にはしない。
           if status == "tool_error":
+              print(json.dumps(payload, ensure_ascii=False, indent=2)[:4000])
               sys.exit(1)
           PY
 
