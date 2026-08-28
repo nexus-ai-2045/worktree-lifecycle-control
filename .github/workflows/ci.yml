@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # repo-preflight 上流の検査ロジック正本（コピーしない）。SHA 固定 + checkout 後に照合。
+  REPO_PREFLIGHT_SHA: acf8cadd6822498f8ffa737a140ed76bdea81f6f
+
 jobs:
   test:
     strategy:
@@ -72,3 +76,144 @@ jobs:
         run: python -m compileall -q src
       - name: Run tests
         run: python -m pytest
+
+  # 本流と同じ開発保証。検査ロジックは上流のまま。engineering-brain は埋め込まない。
+  repository-guarantees:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Resolve consistency base-ref (empty-diff fail-closed on dispatch)
+        id: consistency
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          BASE=""
+          case "$EVENT_NAME" in
+            pull_request)
+              BASE="$PR_BASE_SHA"
+              ;;
+            push)
+              BASE="$BEFORE_SHA"
+              ;;
+            schedule)
+              # 無変更 schedule でも腐敗検出経路を残す。直近親と比較。
+              BASE="$(git rev-parse HEAD~1)"
+              ;;
+            workflow_dispatch)
+              if [ -n "${PR_BASE_SHA:-}" ]; then
+                BASE="$PR_BASE_SHA"
+              elif [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+                BASE="$BEFORE_SHA"
+              else
+                git fetch --no-tags origin "${{ github.event.repository.default_branch }}"
+                BASE="$(git rev-parse "origin/${{ github.event.repository.default_branch }}")"
+              fi
+              ;;
+            *)
+              echo "unsupported event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "consistency base-ref を解決できない → fail-closed" >&2
+            exit 1
+          fi
+          BASE_RESOLVED="$(git rev-parse "$BASE")"
+          # #127 相当: dispatch で BASE==HEAD（空 diff）なら落とす。緑の空振りを防ぐ。
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$BASE_RESOLVED" = "$HEAD" ]; then
+            echo "空diff fail-closed: workflow_dispatch で BASE==HEAD ($HEAD)" >&2
+            exit 1
+          fi
+          echo "base_ref=$BASE_RESOLVED" >> "$GITHUB_OUTPUT"
+          echo "Resolved consistency base_ref=$BASE_RESOLVED head=$HEAD event=$EVENT_NAME"
+
+      - name: Fetch pinned repo-preflight (no logic copy)
+        run: |
+          set -euo pipefail
+          git clone --no-checkout https://github.com/nexus-ai-2045/repo-preflight.git "$RUNNER_TEMP/repo-preflight"
+          git -C "$RUNNER_TEMP/repo-preflight" checkout --detach "$REPO_PREFLIGHT_SHA"
+          test "$(git -C "$RUNNER_TEMP/repo-preflight" rev-parse HEAD)" = "$REPO_PREFLIGHT_SHA"
+
+      - name: Install pinned ai-ratchet-gate wheel
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --require-hashes -r requirements-tools.txt
+
+      - name: Smoke-check ai-ratchet-gate CLI
+        run: |
+          set -euo pipefail
+          python -m ai_ratchet_gate --help | grep -F "tracked∧ignored"
+
+      - name: ai-ratchet-gate (tracked∧ignored, fail-closed on new debt)
+        run: python -m ai_ratchet_gate --repo .
+
+      - name: repo-preflight readiness_scan (evidence)
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/repo-preflight/scripts/readiness_scan.py" \
+            --repo . > "$RUNNER_TEMP/readiness.json"
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "readiness.json"
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          status = payload.get("status")
+          print(f"readiness_scan status={status!r}")
+          # tool_error だけ fail-closed。blocked/pass は証拠として残し、merge 承認にはしない。
+          if status == "tool_error":
+              sys.exit(1)
+          PY
+
+      - name: repo-preflight consistency_gate
+        env:
+          CONSISTENCY_BASE: ${{ steps.consistency.outputs.base_ref }}
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/repo-preflight/scripts/consistency_gate.py" \
+            --repo . \
+            --base-ref "$CONSISTENCY_BASE" \
+            --require-config \
+            --require-mode shadow \
+            --json > "$RUNNER_TEMP/consistency.json"
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          payload = json.loads(
+              (pathlib.Path(os.environ["RUNNER_TEMP"]) / "consistency.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          status = payload.get("status")
+          mode = payload.get("mode")
+          print(f"consistency_gate status={status!r} mode={mode!r}")
+          print(json.dumps(payload, ensure_ascii=False, indent=2))
+          # shadow: 所見は止めない。設定欠落・mode 弱体化・tool_error・enforce 相当 fail は止める。
+          if status in {"pass", "shadow_findings"}:
+              sys.exit(0)
+          sys.exit(1)
+          PY
