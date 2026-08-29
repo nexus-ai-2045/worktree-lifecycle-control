@@ -33,6 +33,19 @@
 
 履歴 rewrite はしない。過去 commit には個人ホームを模した test fixture と、一般化前の dogfood 数字が残る。現在 tree からは外してある。
 
+## 開発保証ゲート（CI）
+
+検査ロジックは本リポジトリへコピーしない。上流を CI から直接呼ぶ。
+
+| 契約 | 上流 | 設定 | CI での扱い |
+|---|---|---|---|
+| 文書・実装の宣言整合 | `nexus-ai-2045/repo-preflight`（pin SHA） | `.repo-preflight-consistency.json`（`shadow`） | `consistency_gate` + `readiness_scan`。shadow 所見は止めない。`tool_error` は fail-closed |
+| tracked ∧ ignored の新規悪化 | `nexus-ai-2045/ai-ratchet-gate` v0.1.1（wheel + SHA-256） | `.ai-ratchet-gate/baseline.txt` | 既存分は grandfather。baseline に無い新規だけ deny |
+
+古い `.repo-preflight.json` は preferences 用途の旧名だったため、整合契約は `.repo-preflight-consistency.json` へ canonicalize し、旧ファイルは残さない。`engineering-brain` は CI に埋め込まない。
+
+`workflow_dispatch` で BASE と HEAD が同一（空 diff）のときは、差分検査を緑にしない（fail-closed）。
+
 ## 停止線
 
 CI green や `readiness_scan` の部分 pass は、追加の公開操作を許可しません。visibility 変更、release、告知の前に次が要ります。

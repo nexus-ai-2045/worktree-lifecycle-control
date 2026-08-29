@@ -1,6 +1,0 @@
-{
-  "schema": "repo-preflight.preferences/v1",
-  "expected_identity": "nexus_ai <273569186+nexus-ai-2045@users.noreply.github.com>",
-  "notes": "expected_identity は公開名義。scan 時は --expected-identity に同じ値を渡す。履歴 rewrite はしない。依存監査は未実施のまま残す。",
-  "dismissals": {}
-}

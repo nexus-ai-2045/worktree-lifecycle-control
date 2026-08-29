@@ -1,0 +1,50 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nexus-ai-2045/repo-preflight/acf8cadd6822498f8ffa737a140ed76bdea81f6f/schemas/repository-consistency.schema.json",
+  "schema": "repo-preflight.consistency/v1",
+  "mode": "shadow",
+  "ratchet": {"baseline": []},
+  "markdown": {
+    "include": [
+      "README.md",
+      "CONTRIBUTING.md",
+      "PREFLIGHT.md",
+      "PUBLIC_READY.md",
+      "SECURITY.md",
+      "docs/**/*.md"
+    ]
+  },
+  "readme_contracts": {
+    "required_paths": [
+      "src/worktree_lifecycle_control/cli.py",
+      "src/worktree_lifecycle_control/reachability.py",
+      "tests/test_reachability.py",
+      "docs/decisions/0002-protect-what-git-does-not.md",
+      "schemas/registry-v2.schema.json"
+    ],
+    "commands": [
+      {
+        "text": "python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account> --json",
+        "paths": [
+          "src/worktree_lifecycle_control/cli.py",
+          "src/worktree_lifecycle_control/closeout_adapter.py"
+        ]
+      }
+    ]
+  },
+  "impact_map": [
+    {
+      "change": ["src/**", "schemas/**"],
+      "requires_any": ["README.md", "docs/**", "tests/**"]
+    },
+    {
+      "change": [
+        ".github/workflows/**",
+        ".repo-preflight-consistency.json",
+        ".ai-ratchet-gate/**"
+      ],
+      "requires_any": ["README.md", "CONTRIBUTING.md", "PREFLIGHT.md", "tests/**"],
+      "allow_github_action_ref_updates": true
+    }
+  ],
+  "generated_artifacts": []
+}
