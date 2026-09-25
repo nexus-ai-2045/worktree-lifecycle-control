@@ -43,9 +43,33 @@ git branch rescue/<name> <head-sha>
 
 まず手元で動かす。削除はしません。`cleanup_candidate` は削除許可ではありません。
 
+### macOS / Linux
+
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate
+pip install -e .
+worktree-lifecycle scan --help
+worktree-lifecycle scan --repo .
+```
+
+### Windows
+
+PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -e .
+worktree-lifecycle scan --help
+worktree-lifecycle scan --repo .
+```
+
+cmd:
+
+```cmd
+python -m venv .venv
+.venv\Scripts\activate.bat
 pip install -e .
 worktree-lifecycle scan --help
 worktree-lifecycle scan --repo .
