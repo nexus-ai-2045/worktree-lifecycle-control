@@ -55,7 +55,7 @@ worktree-lifecycle scan --repo .
 
 ### AIに任せる場合（任意）
 
-次をそのまま AI に貼っても構いません。
+次をそのまま AI に貼っても構いません。raw URL は main 正本です。
 
 ```text
 このリポジトリを読んで直してね。まず危険レビューから出してほしい。
@@ -105,8 +105,10 @@ blocker に載るのは `head_becomes_unreachable`、`dirty_worktree` / `worktre
 
 GitHub 上で PR が merge されたかどうかだけは git から導出できないため、adapter が `status` / `provider` / `evidence_type` / `provider_record_id` / 40 桁 SHA 2 つ / `actor` / timezone 付き `observed_at` を全部返す必要があります。不足は fail-closed です。
 
+collector は別リポ [discord-context-bridge](https://github.com/nexus-ai-2045/discord-context-bridge) の `scripts/post_merge_closeout_report.py` を使う例です（本リポには含まれません。省略可）。
+
 ```powershell
-python path\to\post_merge_closeout_report.py collect --repo owner/name --pr 1 --cwd . --json |
+python path\to\discord-context-bridge\scripts\post_merge_closeout_report.py collect --repo owner/name --pr 1 --cwd . --json |
   python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account> --json
 ```
 
