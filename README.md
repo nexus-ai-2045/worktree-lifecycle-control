@@ -59,7 +59,7 @@ PowerShell:
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -e .
 worktree-lifecycle scan --help
 worktree-lifecycle scan --repo .
