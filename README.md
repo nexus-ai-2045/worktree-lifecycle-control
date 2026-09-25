@@ -41,7 +41,21 @@ git branch rescue/<name> <head-sha>
 
 ## クイックスタート
 
-人間が pip や scan を叩く手順は置いていません。次をそのまま AI に貼ってね。
+まず手元で動かす。削除はしません。`cleanup_candidate` は削除許可ではありません。
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -e .
+worktree-lifecycle scan --help
+worktree-lifecycle scan --repo .
+```
+
+`--repo` は必須です。台帳を使う場合は `--registry registry.example.json` を付けます。JSON が欲しければ `--json`、ファイルへ書くなら `--report-path report.json` です。
+
+### AIに任せる場合（任意）
+
+次をそのまま AI に貼っても構いません。raw URL は main 正本です。
 
 ```text
 このリポジトリを読んで直してね。まず危険レビューから出してほしい。
@@ -56,7 +70,8 @@ https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/
 https://raw.githubusercontent.com/nexus-ai-2045/worktree-lifecycle-control/main/PREFLIGHT.md
 ```
 
-コマンド名は上の「できること」を見てもらえば十分です。この CLI は消しません。
+この CLI は消しません。
+
 ## 判定
 
 危険条件は一つの状態へ潰さず、`blockers[]` へ同時に保持します。削除を止めない情報は `review_signals[]` へ分けます。
@@ -90,8 +105,10 @@ blocker に載るのは `head_becomes_unreachable`、`dirty_worktree` / `worktre
 
 GitHub 上で PR が merge されたかどうかだけは git から導出できないため、adapter が `status` / `provider` / `evidence_type` / `provider_record_id` / 40 桁 SHA 2 つ / `actor` / timezone 付き `observed_at` を全部返す必要があります。不足は fail-closed です。
 
+collector は別リポ [discord-context-bridge](https://github.com/nexus-ai-2045/discord-context-bridge) の `scripts/post_merge_closeout_report.py` を使う例です（本リポには含まれません。省略可）。
+
 ```powershell
-python path\to\post_merge_closeout_report.py collect --repo owner/name --pr 1 --cwd . --json |
+python path\to\discord-context-bridge\scripts\post_merge_closeout_report.py collect --repo owner/name --pr 1 --cwd . --json |
   python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account> --json
 ```
 
