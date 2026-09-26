@@ -123,6 +123,8 @@ flowchart TD
 
 blocker に載るのは `head_becomes_unreachable`、`dirty_worktree` / `worktree_locked`、`primary_worktree`、`pinned`、測定不能、`unknown_ignored_content` だけです。未 push や owner 不明は `review_signals[]` に出ます。
 
+HEAD が到達不能でも、その内容が base に取り込み済みだと git の事実だけで証明できた時は、blocker ではなく `head_unreachable_content_integrated` (signal) になります。squash / rebase merge した PR の branch を消すと、worktree に残った元の commit は必ず到達不能になるためです。根拠と証明方法は `observations.unreachable_content_proof` に出ます。証明できなければ従来どおり保護します。詳細は [ADR 0004](docs/decisions/0004-unreachable-but-integrated.md)。
+
 ## 統合証跡 (任意)
 
 統合状態は削除条件ではなく表示用の signal です。branch が base に取り込まれているかは `git cherry` で毎回導出します。
