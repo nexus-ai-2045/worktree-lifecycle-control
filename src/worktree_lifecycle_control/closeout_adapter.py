@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from .evidence import parse_rfc3339
 
 GH_TIMEOUT_SECONDS = 30
+# gh pr view --json commits が返す最大件数。これ以上は切り詰められる。
+GH_COMMITS_PAGE_LIMIT = 100
 """gh 呼び出しの上限。応答しない gh を無期限に待つと収集全体が止まる。"""
 
 
@@ -51,9 +53,10 @@ def enrich_subject_head_via_gh(pr_state: dict[str, Any]) -> str | None:
                 "--repo",
                 repo,
                 "--json",
-                "commits",
+                # commits は先頭 100 件で切り詰められるため、PR の先端は headRefOid で取る。
+                "headRefOid",
                 "--jq",
-                ".commits[-1].oid",
+                ".headRefOid",
             ],
             capture_output=True,
             text=True,
@@ -76,12 +79,27 @@ def subject_head_from_pr_state(
     explicit: str | None = None,
     allow_gh_enrich: bool = True,
 ) -> str:
-    """Prefer explicit SHA, then commits, then optional gh enrichment."""
+    """PR の先端 SHA を返す。明示値 → headRefOid → commits の末尾 → gh 補完の順。
+
+    `gh pr view --json commits` は先頭 100 件しか返さない。100 件を超える PR で
+    commits[-1] を先端とみなすと、100 件目の commit を「検証済みの先端」として
+    記録してしまう (nodejs/node の 209 commit の PR で実測)。先端は headRefOid が
+    正本で、commits は headRefOid が無い入力のための予備に留める。予備でも 100 件
+    ちょうどなら切り詰めを疑って失敗させる。
+    """
     if isinstance(explicit, str) and explicit.strip():
         return _require_full_sha(explicit.lower(), "subject_head_sha")
     if isinstance(pr_state.get("subject_head_sha"), str):
         return _require_full_sha(pr_state["subject_head_sha"].lower(), "subject_head_sha")
+    head_ref_oid = pr_state.get("headRefOid")
+    if isinstance(head_ref_oid, str) and head_ref_oid.strip():
+        return _require_full_sha(head_ref_oid.lower(), "pr_state.headRefOid")
     commits = pr_state.get("commits")
+    if isinstance(commits, list) and len(commits) >= GH_COMMITS_PAGE_LIMIT:
+        raise CloseoutAdapterError(
+            f"pr_state.commits has {len(commits)} entries and may be truncated; "
+            "include headRefOid to identify the PR head"
+        )
     if isinstance(commits, list) and commits:
         last = commits[-1]
         if isinstance(last, dict):
@@ -128,9 +146,8 @@ def _resolve_actor(
     収集を実行した account (`account_context`) を actor に流用しない。
     「収集した人」と「merge した人」は別人でありうる。前者は observed_by に置く。
 
-    2026-08-20 時点の shared/scripts/post_merge_closeout_report.py は
-    `--json number,state,mergedAt,mergeCommit,url,headRefName,baseRefName,statusCheckRollup`
-    を要求しており `mergedBy` を含まない。上流が返すまでは --actor で明示する。
+    closeout collect は `mergedBy` を要求して pr_state に含める。含まない入力
+    (古い保存結果や手組みの payload) のときだけ --actor で明示する。
     """
     for candidate in (
         (pr_state.get("mergedBy") or {}).get("login") if isinstance(pr_state.get("mergedBy"), dict) else None,
@@ -142,7 +159,7 @@ def _resolve_actor(
             return resolved
     raise CloseoutAdapterError(
         "actor could not be determined: pr_state.mergedBy.login is absent "
-        "(the closeout collector does not request it) and no --actor was given"
+        "and no --actor was given"
     )
 
 

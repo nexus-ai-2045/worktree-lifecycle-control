@@ -718,8 +718,7 @@ def build_parser() -> argparse.ArgumentParser:
     evidence.add_argument(
         "--actor",
         help=(
-            "統合を実行した主体。closeout collect が mergedBy を返さないため、"
-            "上流が返すまではここで明示する"
+            "統合を実行した主体。入力の pr_state.mergedBy が無いときだけ明示する"
         ),
     )
     evidence.add_argument("--json", action="store_true", help="print evidence JSON to stdout")
