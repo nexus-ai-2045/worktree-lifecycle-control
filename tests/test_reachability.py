@@ -276,6 +276,51 @@ def test_evil_merge_content_blocks_the_proof(repo: Path) -> None:
     assert unreachable_content_proof(repo, head, "main") is None
 
 
+def test_whitespace_only_difference_is_not_proof_of_integration(repo: Path) -> None:
+    """patch-id は空白を無視する。インデント違いの版が base にあっても証明にしない。
+
+    YAML のようにインデントが意味を持つ内容では、cherry の `-` は「同じ内容」を意味しない。
+    `git cherry` の判定は signal (統合表示) には使えるが、唯一の写しを外す証明には使えない。
+    """
+    git(repo, "checkout", "-b", "feature")
+    head = commit_file(repo, "conf.yaml", "a:\n  b: 1\n")
+    git(repo, "checkout", "main")
+    commit_file(repo, "conf.yaml", "a:\n    b: 1\n")
+    git(repo, "branch", "-D", "feature")
+
+    assert head_reachability(repo, head) is False
+    # 前提: patch-id では等価に見える
+    assert branch_integration(repo, head, "main") == "integrated"
+    assert unreachable_content_proof(repo, head, "main") is None
+
+
+def git_bytes(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
+    proc = subprocess.run(["git", "-C", str(repo), *args], input=stdin, capture_output=True, check=True)
+    return proc.stdout.strip()
+
+
+def test_newline_in_path_is_not_normalized_away(repo: Path) -> None:
+    """改行で始まり改行で終わるパスを、改行を剥がした別のパスと取り違えない。
+
+    `"\\nsecret\\n"` だけを持つ detached commit を作る。base には `secret` を足して消した
+    履歴があり、剥がした名前で比べると「どちらにも無い」で一致してしまう。
+    改行入りのパスは Windows のファイルシステムに書けないので、plumbing だけで組む。
+    """
+    commit_file(repo, "secret", "normalized\n")
+    git(repo, "rm", "-q", "secret")
+    git(repo, "commit", "-m", "remove secret")
+    base = git(repo, "rev-parse", "HEAD")
+
+    blob = git_bytes(repo, "hash-object", "-w", "--stdin", stdin=b"only copy\n").decode()
+    listing = git_bytes(repo, "ls-tree", "-z", base)  # 各行は NUL 終端済み
+    entries = listing +f"100644 blob {blob}\t".encode() + b"\nsecret\n\0"
+    tree = git_bytes(repo, "mktree", "-z", stdin=entries).decode()
+    head = git_bytes(repo, "commit-tree", tree, "-p", base, "-m", "newline path", stdin=b"").decode()
+
+    assert head_reachability(repo, head) is False
+    assert unreachable_content_proof(repo, head, "main") is None
+
+
 def test_proof_is_none_when_it_cannot_be_measured(repo: Path) -> None:
     """測れないことを「取り込み済み」と言わない。"""
     head = git(repo, "rev-parse", "HEAD")

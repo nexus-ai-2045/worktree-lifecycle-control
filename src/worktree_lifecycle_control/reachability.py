@@ -37,7 +37,9 @@ GIT_TIMEOUT_SECONDS = 60
 BASE_REF_CANDIDATES = ("origin/HEAD", "origin/main", "origin/master", "main", "master")
 
 
-def run_git(repo: Path | str, *args: str, timeout: int = GIT_TIMEOUT_SECONDS) -> subprocess.CompletedProcess[bytes]:
+def run_git(
+    repo: Path | str, *args: str, timeout: int = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
+) -> subprocess.CompletedProcess[bytes]:
     """git をタイムアウト付きで実行する。失敗は例外にせず returncode で返す。
 
     タイムアウトした場合は returncode=124 の CompletedProcess を合成して返す。
@@ -47,6 +49,7 @@ def run_git(repo: Path | str, *args: str, timeout: int = GIT_TIMEOUT_SECONDS) ->
     try:
         return subprocess.run(
             ["git", "-C", str(repo), *args],
+            input=stdin,
             capture_output=True,
             check=False,
             timeout=timeout,
@@ -122,8 +125,10 @@ def unreachable_content_proof(repo: Path | str, head: str | None, base_ref: str 
        `git cherry` に現れないため、手で足した内容 (evil merge) はここでしか捕まえられない。
        一致すれば merge 自身は独自の内容を持たず、その内容は親から再現できる。
     2. 到達不能な非 merge commit について、次のどちらかが成り立つこと。
-       - `patch_equivalent`: `git cherry <base> <head>` で全件 `-` (base に patch-id の
-         等しい commit がある)。rebase merge / cherry-pick の形。
+       - `patch_equivalent`: 空白を剥がさない patch-id (`git patch-id --verbatim`) が等しい
+         commit が base にある。rebase merge / cherry-pick の形。`git cherry` は既定の patch-id
+         (空白を無視する) を使うので、インデントだけ違う版でも `-` と出る。signal には使えるが、
+         唯一の写しを外す証明には使えない。
        - `tree_match`: それらの commit が触ったパスについて、head の内容と完全に一致する
          commit が base の履歴上に 1 つある。複数 commit を 1 つに潰した squash merge の形。
          比較するパスに merge 経由で入ったものを含めないのは、1 で merge が独自の内容を
@@ -150,7 +155,7 @@ def unreachable_content_proof(repo: Path | str, head: str | None, base_ref: str 
     if _all_patch_equivalent(repo, head, base_ref, plain):
         return {**proof, "method": "patch_equivalent"}
 
-    paths = _paths_touched_by(repo, head)
+    paths = _paths_touched_by(repo, plain)
     if not paths:
         return None
     matched = _find_tree_match(repo, head, base_ref, paths)
@@ -175,32 +180,56 @@ def _is_clean_two_parent_merge(repo: Path | str, row: list[str]) -> bool:
 
 
 def _all_patch_equivalent(repo: Path | str, head: str, base_ref: str, commits: list[str]) -> bool:
-    """到達不能な非 merge commit が、すべて `git cherry` で `-` と出るか。"""
-    proc = run_git(repo, "cherry", base_ref, head)
-    if proc.returncode != 0:
+    """到達不能な非 merge commit が、すべて base 側に verbatim patch-id の等しい commit を持つか。
+
+    比べる相手は `git cherry` と同じく「base にあって head に無い commit」。
+    `--binary` を付けないと、別々のバイナリ変更が同じ "Binary files differ" に潰れて一致する。
+    """
+    ours = _verbatim_patch_ids(repo, head, *_UNREACHABLE_ROOTS)
+    theirs = _verbatim_patch_ids(repo, f"{head}..{base_ref}")
+    if ours is None or theirs is None:
         return False
-    marks: dict[str, str] = {}
+    base_ids = set(theirs.values())
+    # patch が空 (mode だけの変更など) の commit は patch-id が出ないので、ours に無い = 失敗扱い
+    return all(ours.get(commit) in base_ids for commit in commits)
+
+
+def _verbatim_patch_ids(repo: Path | str, *revisions: str) -> dict[str, str] | None:
+    """commit → 空白を剥がさない patch-id。測れなければ None。"""
+    log = run_git(
+        repo, "log", "-p", "--binary", "--full-index", "--no-merges", "--no-renames", "--no-color",
+        "--no-ext-diff", "--no-textconv", "--format=commit %H", *revisions,
+    )
+    if log.returncode != 0:
+        return None
+    if not log.stdout.strip():
+        return {}
+    proc = run_git(repo, "patch-id", "--verbatim", stdin=log.stdout)
+    if proc.returncode != 0:  # --verbatim の無い古い git も証明なしに倒す
+        return None
+    ids: dict[str, str] = {}
     for line in proc.stdout.decode("ascii", errors="replace").splitlines():
         parts = line.split()
         if len(parts) == 2:
-            marks[parts[1]] = parts[0]
-    # cherry に現れない commit (merge-base より前など) は等価の根拠が無いので失敗扱い
-    return all(marks.get(commit) == "-" for commit in commits)
+            ids[parts[1]] = parts[0]
+    return ids
 
 
-def _paths_touched_by(repo: Path | str, head: str) -> list[str]:
+def _paths_touched_by(repo: Path | str, commits: list[str]) -> list[str]:
     """到達不能な非 merge commit が触ったパス。rename は旧名・新名の両方を数える。
 
-    `-z` で読む。改行や非 ASCII を含むパスを quotepath 付きで読むと、存在しないパスを
-    比較して「一致」と誤判定する。
+    `-z` の出力は NUL だけで区切り、前後の改行も含めてパス名として扱う。改行を剥がすと
+    `"\nsecret\n"` が別のパス `secret` に化け、無関係なパスを比べて「一致」と誤判定する。
     """
-    proc = run_git(
-        repo, "log", "-z", "--format=", "--name-only", "--no-renames", "--no-merges", head, *_UNREACHABLE_ROOTS
-    )
-    if proc.returncode != 0:
-        return []
-    names = {part.strip(b"\n").decode("utf-8", errors="surrogateescape") for part in proc.stdout.split(b"\0")}
-    return sorted(name for name in names if name)
+    names: set[str] = set()
+    for commit in commits:
+        proc = run_git(
+            repo, "diff-tree", "-r", "-z", "--root", "--no-commit-id", "--name-only", "--no-renames", commit
+        )
+        if proc.returncode != 0:
+            return []
+        names.update(part.decode("utf-8", errors="surrogateescape") for part in proc.stdout.split(b"\0") if part)
+    return sorted(names)
 
 
 def _find_tree_match(repo: Path | str, head: str, base_ref: str, paths: list[str]) -> str | None:
