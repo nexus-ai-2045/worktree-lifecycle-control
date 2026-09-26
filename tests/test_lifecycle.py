@@ -314,6 +314,50 @@ def test_unreachable_head_is_the_only_blocker_git_does_not_enforce() -> None:
     assert "unpushed_commits" not in result.blockers
 
 
+def test_proven_integrated_unreachable_head_is_a_signal_not_a_blocker() -> None:
+    """到達不能でも、内容が base にあると証明できた時だけ blocker から降格する。
+
+    squash / rebase merge した branch を消すと、worktree に残った元の commit は必ず
+    到達不能になる。到達可能性だけで判定すると、実損ゼロの worktree が危険として並ぶ。
+    """
+    proof = {"method": "tree_match", "base_ref": "origin/main", "matched_commit": "abc"}
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=None,
+        locked=False,
+        head=HEAD,
+        entry={},
+        now=NOW,
+        reachable=False,
+        detached=True,
+        integration_state="not_integrated",
+        unreachable_content_proof=proof,
+    )
+    assert "head_becomes_unreachable" not in result.blockers
+    assert "head_unreachable_content_integrated" in result.review_signals
+    assert result.observations["unreachable_content_proof"] == proof
+    assert result.disposition == "cleanup_candidate"
+
+
+def test_unreachable_head_without_proof_stays_protected() -> None:
+    result = assess_lifecycle(
+        exists=True,
+        dirty=False,
+        unpushed=None,
+        locked=False,
+        head=HEAD,
+        entry={},
+        now=NOW,
+        reachable=False,
+        detached=True,
+        unreachable_content_proof=None,
+    )
+    assert "head_becomes_unreachable" in result.blockers
+    assert "head_unreachable_content_integrated" not in result.review_signals
+    assert result.disposition == "protected"
+
+
 def test_assessment_preserves_orthogonal_blockers() -> None:
     result = assess_lifecycle(
         exists=True,

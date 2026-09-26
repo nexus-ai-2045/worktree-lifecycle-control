@@ -27,6 +27,7 @@ from .reachability import (
     head_reachability,
     resolve_base_ref,
     run_git,
+    unreachable_content_proof,
 )
 
 
@@ -472,6 +473,7 @@ def assess_lifecycle(
     unknown_ignored_paths: Sequence[str] = (),
     ignored_measurement_failed: bool = False,
     registered: bool | None = None,
+    unreachable_content_proof: dict[str, Any] | None = None,
 ) -> LifecycleAssessment:
     """worktree 1 件を評価する。
 
@@ -505,6 +507,7 @@ def assess_lifecycle(
         "git_locked": locked,
         "detached_head": detached,
         "head_reachable_elsewhere": reachable,
+        "unreachable_content_proof": unreachable_content_proof,
         "integration_state": integration_state,
         "owner": owner,
         "lifecycle_status": lifecycle,
@@ -531,7 +534,7 @@ def assess_lifecycle(
         blockers.append("head_reachability_unknown")
 
     # --- blocker: 消すと失われる / git が消させない -------------------------
-    if reachable is False:
+    if reachable is False and unreachable_content_proof is None:
         # git は detached HEAD の worktree を無警告で削除し、gc で commit を失う。
         # git が守らない唯一の経路であり、このツールの中核的な存在理由。
         blockers.append("head_becomes_unreachable")
@@ -554,6 +557,10 @@ def assess_lifecycle(
     # --- signal: 判断材料。削除を止めない -----------------------------------
     if detached:
         signals.append("detached_head")
+    if reachable is False and unreachable_content_proof is not None:
+        # 到達不能になるのは commit だけで、内容は base にあると証明できた (squash /
+        # rebase merge 後の残骸)。失うのは commit メッセージと途中の状態だけなので止めない。
+        signals.append("head_unreachable_content_integrated")
     if unpushed is None:
         signals.append("remote_reachability_unknown")
     elif unpushed > 0:
@@ -615,6 +622,8 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
         # 到達性と統合状態は repo 側の ref を見る。worktree が消えていても評価できる。
         reachable = head_reachability(repo, head_sha)
         integration_state = branch_integration(repo, head_sha, base_ref)
+        # 証明は到達不能な時だけ試す。到達可能な worktree に git を余計に呼ばない。
+        content_proof = unreachable_content_proof(repo, head_sha, base_ref) if reachable is False else None
         commit_at = head_committer_at(path) if exists else None
         created_at = entry.get("created_at")
         expires_at = entry.get("expires_at")
@@ -639,6 +648,7 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             unknown_ignored_paths=(ignored_unknown if ignored is not None else ("<measurement-failed>",)),
             ignored_measurement_failed=ignored is None and exists,
             registered=registered,
+            unreachable_content_proof=content_proof,
         )
         assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
         integration_value = entry.get("integration")

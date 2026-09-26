@@ -22,6 +22,8 @@ GitHub API / gh                <- git から導出できない「PR が merge �
 判定に効く事実は git から毎回導出し、台帳には保存しない。導出できるものを保存すると、
 保存した瞬間から drift が始まる。詳細は
 [ADR 0002](decisions/0002-protect-what-git-does-not.md)。
+squash / rebase merge 後に残る到達不能 HEAD の扱いは
+[ADR 0004](decisions/0004-unreachable-but-integrated.md)。
 
 ## Coreが所有するもの
 
