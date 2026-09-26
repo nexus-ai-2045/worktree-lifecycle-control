@@ -23,7 +23,7 @@
     ],
     "commands": [
       {
-        "text": "python -m worktree_lifecycle_control evidence-from-closeout --actor <merge した account> --json",
+        "text": "python -m worktree_lifecycle_control evidence-from-closeout --json",
         "paths": [
           "src/worktree_lifecycle_control/cli.py",
           "src/worktree_lifecycle_control/closeout_adapter.py"

@@ -807,8 +807,9 @@ _REAL_COLLECT_SHAPE = {
             {
                 "pr_state": {
                     key: _REAL_COLLECT_SHAPE["pr_state"][key]
-                    for key in ("number", "state", "mergedAt", "mergeCommit", "mergedBy", "commits")
-                },
+                    for key in ("number", "state", "mergedAt", "mergeCommit", "mergedBy")
+                }
+                | {"headRefOid": "c" * 40},
                 "observed_at": "2026-09-26T16:04:52Z",
             },
             id="readme-gh-one-liner",
@@ -837,3 +838,25 @@ def test_evidence_from_closeout_cli_rejects_input_without_observed_at(tmp_path, 
     source.write_text(json.dumps(payload), encoding="utf-8")
     assert main(["evidence-from-closeout", "--input", str(source), "--no-gh-enrich"]) == 2
     assert "collection timestamp is required" in capsys.readouterr().out
+
+
+def test_head_ref_oid_wins_over_truncated_commits() -> None:
+    """commits は 100 件で切り詰められる。先端は headRefOid を正とする。"""
+    from worktree_lifecycle_control.closeout_adapter import subject_head_from_pr_state
+
+    truncated = [{"oid": f"{index:040x}"} for index in range(100)]
+    assert subject_head_from_pr_state(
+        {"headRefOid": "D" * 40, "commits": truncated}, allow_gh_enrich=False
+    ) == "d" * 40
+
+
+def test_possibly_truncated_commits_without_head_ref_oid_fail_closed() -> None:
+    from worktree_lifecycle_control.closeout_adapter import subject_head_from_pr_state
+
+    truncated = [{"oid": f"{index:040x}"} for index in range(100)]
+    with pytest.raises(CloseoutAdapterError, match="may be truncated"):
+        subject_head_from_pr_state({"commits": truncated}, allow_gh_enrich=False)
+    # 100 件未満なら末尾を先端として使う (従来どおり)
+    assert subject_head_from_pr_state(
+        {"commits": truncated[:99]}, allow_gh_enrich=False
+    ) == f"{98:040x}"

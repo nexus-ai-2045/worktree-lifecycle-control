@@ -132,12 +132,13 @@ GitHub 上で PR が merge されたかどうかだけは git から導出でき
 入力は `gh pr view` の結果 (`pr_state`) と、それを取得した時刻 (`observed_at`) です。`gh` だけで作れます。
 
 ```powershell
-gh pr view 1 --repo owner/name --json number,state,mergedAt,mergeCommit,mergedBy,commits --jq '{pr_state: ., observed_at: (now | todate)}' |
+gh pr view 1 --repo owner/name --json number,state,mergedAt,mergeCommit,mergedBy,headRefOid --jq '{pr_state: ., observed_at: (now | todate)}' |
   python -m worktree_lifecycle_control evidence-from-closeout --json
 ```
 
 - `observed_at` は「いつ観測したか」です。merge 時刻ではありません。無い入力は失敗させます。保存しておいた古い結果を、あとから「今観測した」ことにしないためです。
 - `mergedBy` があれば、merge した account がそのまま `actor` になります。無い入力のときだけ `--actor` で明示します。
+- PR の先端は `headRefOid` で渡します。`commits` は先頭 100 件で切り詰められるため、先端の判定には使いません。
 
 ## 台帳 (任意)
 
