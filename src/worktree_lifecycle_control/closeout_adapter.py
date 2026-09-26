@@ -128,9 +128,8 @@ def _resolve_actor(
     収集を実行した account (`account_context`) を actor に流用しない。
     「収集した人」と「merge した人」は別人でありうる。前者は observed_by に置く。
 
-    2026-08-20 時点の shared/scripts/post_merge_closeout_report.py は
-    `--json number,state,mergedAt,mergeCommit,url,headRefName,baseRefName,statusCheckRollup`
-    を要求しており `mergedBy` を含まない。上流が返すまでは --actor で明示する。
+    closeout collect は `mergedBy` を要求して pr_state に含める。含まない入力
+    (古い保存結果や手組みの payload) のときだけ --actor で明示する。
     """
     for candidate in (
         (pr_state.get("mergedBy") or {}).get("login") if isinstance(pr_state.get("mergedBy"), dict) else None,
@@ -142,7 +141,7 @@ def _resolve_actor(
             return resolved
     raise CloseoutAdapterError(
         "actor could not be determined: pr_state.mergedBy.login is absent "
-        "(the closeout collector does not request it) and no --actor was given"
+        "and no --actor was given"
     )
 
 

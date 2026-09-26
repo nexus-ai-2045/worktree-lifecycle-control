@@ -769,3 +769,71 @@ def test_evidence_from_closeout_collect_rejects_open_pr() -> None:
         assert False, "expected CloseoutAdapterError"
     except CloseoutAdapterError as exc:
         assert "MERGED" in str(exc)
+
+
+# closeout collect の実出力と同じ key 構成 (2026-09-27 に実 PR で取得した形)。
+# 以前は observed_at と mergedBy が無く、そのまま流すと必ず rc=2 だった。
+_REAL_COLLECT_SHAPE = {
+    "decision": "pass",
+    "reason": "",
+    "violations": [],
+    "packet": "post_merge_closeout:\n- pr_state: merged",
+    "pr_state": {
+        "number": 19,
+        "state": "MERGED",
+        "mergedAt": "2026-09-25T14:59:06Z",
+        "mergeCommit": {"oid": "a" * 40},
+        "url": "https://github.com/owner/name/pull/19",
+        "headRefName": "docs/example",
+        "baseRefName": "main",
+        "statusCheckRollup": [],
+        "mergedBy": {"login": "merger"},
+        "commits": [{"oid": "b" * 40}, {"oid": "c" * 40}],
+    },
+    "open_prs": [],
+    "remote_main": "a" * 40,
+    "remote_branch": "not_found",
+    "account_context": {"checks": {"active_api_login": {"status": "ok", "value": "collector"}}},
+    "observed_at": "2026-09-26T16:04:52Z",
+}
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param(_REAL_COLLECT_SHAPE, id="closeout-collect-output"),
+        # README の gh 直叩き例が作る形: {pr_state, observed_at} だけ
+        pytest.param(
+            {
+                "pr_state": {
+                    key: _REAL_COLLECT_SHAPE["pr_state"][key]
+                    for key in ("number", "state", "mergedAt", "mergeCommit", "mergedBy", "commits")
+                },
+                "observed_at": "2026-09-26T16:04:52Z",
+            },
+            id="readme-gh-one-liner",
+        ),
+    ],
+)
+def test_evidence_from_closeout_cli_accepts_real_input_without_actor(tmp_path, capsys, payload) -> None:
+    import json
+
+    source = tmp_path / "collect.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["evidence-from-closeout", "--input", str(source), "--no-gh-enrich", "--json"]) == 0
+    evidence = json.loads(capsys.readouterr().out)
+    assert evidence["actor"] == "merger"
+    assert evidence["subject_head_sha"] == "c" * 40
+    assert evidence["observed_at"] == "2026-09-26T16:04:52Z"
+    assert evidence["subject_merged_at"] == "2026-09-25T14:59:06Z"
+
+
+def test_evidence_from_closeout_cli_rejects_input_without_observed_at(tmp_path, capsys) -> None:
+    """取得時刻の無い入力は、今の時刻で補わずに失敗させる。"""
+    import json
+
+    payload = {key: value for key, value in _REAL_COLLECT_SHAPE.items() if key != "observed_at"}
+    source = tmp_path / "collect.json"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    assert main(["evidence-from-closeout", "--input", str(source), "--no-gh-enrich"]) == 2
+    assert "collection timestamp is required" in capsys.readouterr().out
