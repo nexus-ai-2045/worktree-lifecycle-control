@@ -12,6 +12,7 @@ from worktree_lifecycle_control.checkout_health import (
     find_leftover_worktree_dirs,
     load_baseline,
     probe_repo,
+    repair_hints_for,
 )
 from worktree_lifecycle_control.cli import main
 
@@ -72,6 +73,15 @@ def test_probe_repo_reports_failure_kind_for_non_repo(tmp_path: Path) -> None:
     assert health.failure_kind == "not_a_repository"
 
 
+def test_probe_repo_does_not_accept_parent_repository(tmp_path: Path) -> None:
+    outer = _init_repo(tmp_path / "outer")
+    plain = outer / "plain"
+    plain.mkdir()
+    health = probe_repo(plain)
+    assert health.git_usable is False
+    assert health.failure_kind == "not_a_repository"
+
+
 def test_probe_repo_reports_prunable_worktree(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "repo")
     wt = tmp_path / "wt"
@@ -85,6 +95,13 @@ def test_probe_repo_reports_prunable_worktree(tmp_path: Path) -> None:
     health = probe_repo(repo)
     assert health.git_usable is True
     assert len(health.prunable_paths) == 1
+
+
+def test_prunable_repair_hint_requires_content_review() -> None:
+    hint = repair_hints_for({"prunable_worktrees": 1})["prunable_worktrees"]
+    assert "実体" in hint
+    assert "人間" in hint
+    assert "git worktree prune" not in hint
 
 
 # --- 残骸 dir: 登録解除済みなのに実体が残った worktree ------------------------
