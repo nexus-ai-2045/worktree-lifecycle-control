@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from worktree_lifecycle_control.cli import scan_repo
+from worktree_lifecycle_control.cli import inventory_orphan_path, scan_repo
 from worktree_lifecycle_control.reachability import (
     branch_integration,
     head_reachability,
@@ -344,3 +344,133 @@ def test_scan_downgrades_proven_unreachable_head_to_review_signal(repo: Path, tm
     assert "head_unreachable_content_integrated" in record.review_signals
     assert record.observations["unreachable_content_proof"]["method"] == "tree_match"
     assert record.disposition == "cleanup_candidate"
+
+
+def test_scan_measures_remaining_files_when_worktree_git_marker_is_missing(
+    repo: Path, tmp_path: Path
+) -> None:
+    worktree = tmp_path / "wt"
+    git(repo, "worktree", "add", "--detach", str(worktree))
+    (worktree / ".git").unlink()
+    (worktree / "a.txt").unlink()
+    cache = worktree / ".venv" / "Lib" / "site-packages"
+    cache.mkdir(parents=True)
+    (cache / "marker.txt").write_text("cache\n", encoding="utf-8")
+
+    records = {Path(r.path).resolve(): r for r in scan_repo(repo, {"entries": {}}, NOW)}
+    record = records[worktree.resolve()]
+    assert record.disposition == "orphan_unknown"
+    assert record.observations["checkout_identity_status"] == "git_marker_missing"
+    assert record.observations["git_marker_present"] is False
+    assert record.observations["prunable_reason"]
+    assert record.observations["filesystem_inventory"] == {
+        "status": "complete",
+        "top_level_entries": [".venv"],
+        "top_level_entries_truncated": False,
+        "file_count": 1,
+        "directory_count": 3,
+        "reparse_count": 0,
+        "other_count": 0,
+        "total_file_bytes": 7,
+        "error_count": 0,
+        "limit_reached": False,
+        "root_reparse": False,
+    }
+
+
+def test_scan_does_not_measure_parent_repo_for_worktree_without_git_marker(
+    repo: Path, tmp_path: Path
+) -> None:
+    git(tmp_path, "init", "--initial-branch=outer")
+    git(tmp_path, "config", "user.email", "test@example.invalid")
+    git(tmp_path, "config", "user.name", "test")
+    (tmp_path / ".gitignore").write_text("repo/\nwt/\n", encoding="utf-8")
+    git(tmp_path, "add", ".gitignore")
+    git(tmp_path, "commit", "-m", "ignore nested repositories")
+    worktree = tmp_path / "wt"
+    git(repo, "worktree", "add", "--detach", str(worktree))
+    (worktree / ".git").unlink()
+    (worktree / "a.txt").unlink()
+    assert git(worktree, "status", "--porcelain") == ""
+
+    records = {Path(r.path).resolve(): r for r in scan_repo(repo, {"entries": {}}, NOW)}
+    record = records[worktree.resolve()]
+    assert record.disposition == "orphan_unknown"
+    assert record.dirty is None
+    assert record.unpushed_commits is None
+    assert record.observations["checkout_identity_status"] == "git_marker_missing"
+
+
+def test_scan_rejects_git_marker_for_another_worktree(repo: Path, tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    git(repo, "worktree", "add", "--detach", str(first))
+    commit_file(repo, "b.txt", "b\n")
+    second = tmp_path / "second"
+    git(repo, "worktree", "add", "--detach", str(second))
+    second_marker = (second / ".git").read_text(encoding="utf-8")
+    (first / ".git").unlink()
+    (first / ".git").write_text(second_marker, encoding="utf-8")
+
+    records = {Path(r.path).resolve(): r for r in scan_repo(repo, {"entries": {}}, NOW)}
+    record = records[first.resolve()]
+    assert record.disposition == "orphan_unknown"
+    assert record.dirty is None
+    assert record.observations["checkout_identity_status"] != "verified"
+
+
+def test_scan_rejects_other_worktree_gitdir_even_with_same_head(
+    repo: Path, tmp_path: Path
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    git(repo, "worktree", "add", "--detach", str(first))
+    git(repo, "worktree", "add", "--detach", str(second))
+    second_marker = (second / ".git").read_text(encoding="utf-8")
+    (first / ".git").unlink()
+    (first / ".git").write_text(second_marker, encoding="utf-8")
+
+    records = {Path(r.path).resolve(): r for r in scan_repo(repo, {"entries": {}}, NOW)}
+    record = records[first.resolve()]
+    assert record.disposition == "orphan_unknown"
+    assert record.observations["checkout_identity_status"] == "gitdir_backlink_mismatch"
+
+
+def test_orphan_inventory_does_not_follow_root_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "private.txt").write_text("private", encoding="utf-8")
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlink is unavailable on this host")
+    result = inventory_orphan_path(alias)
+    assert result["status"] == "partial"
+    assert result["root_reparse"] is True
+    assert result["file_count"] == 0
+
+
+def test_orphan_inventory_stops_when_root_is_reparse_point(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "private.txt").write_text("private", encoding="utf-8")
+    monkeypatch.setattr(
+        "worktree_lifecycle_control.cli._is_reparse_point", lambda path: path == root
+    )
+    result = inventory_orphan_path(root)
+    assert result["status"] == "partial"
+    assert result["root_reparse"] is True
+    assert result["file_count"] == 0
+
+
+def test_orphan_inventory_stops_at_entry_limit(tmp_path: Path) -> None:
+    root = tmp_path / "wide"
+    root.mkdir()
+    for name in ("a", "b", "c"):
+        (root / name).write_text(name, encoding="utf-8")
+    result = inventory_orphan_path(root, max_entries=2)
+    assert result["status"] == "partial"
+    assert result["limit_reached"] is True
+    assert result["file_count"] == 2

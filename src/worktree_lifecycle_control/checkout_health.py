@@ -22,6 +22,7 @@ ratchet 契約: baseline より件数が増えたら fail (単調非増加)。�
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,10 @@ REPAIR_HINTS = {
         "POSIX は chown。`safe.directory` は回避であって修復ではない"
     ),
     "git_unusable_other": "git が動かない理由を stderr で確認する (repo 消失 / timeout など)",
-    "prunable_worktrees": "`git worktree prune` で metadata を掃除する",
+    "prunable_worktrees": (
+        "実体と残存ファイルを測り、人間レビューで内容と復元経路を確認してから "
+        "Git metadata の整理を判断する"
+    ),
     "leftover_worktree_dirs": (
         "登録解除済みの残骸 dir。中身が統合済みであることを確認してから削除する"
     ),
@@ -90,6 +94,26 @@ def probe_repo(repo: Path) -> RepoHealth:
     回避付きで測ると「回避すれば動く」ことしか分からず、素の運用 (repo 自身の
     script / CI / 他ツール) が壊れている事実を見逃す。
     """
+    root = run_git(repo, "rev-parse", "--show-toplevel")
+    if root.returncode != 0 or not root.stdout.strip():
+        kind = "timeout" if root.returncode == 124 else classify_git_failure(root.stderr)
+        detail = root.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        return RepoHealth(
+            repo=str(repo),
+            git_usable=False,
+            failure_kind=kind,
+            failure_detail=detail[0] if detail else None,
+            prunable_paths=(),
+        )
+    resolved_root = Path(root.stdout.decode("utf-8", errors="surrogateescape").strip())
+    if os.path.normcase(str(resolved_root.resolve())) != os.path.normcase(str(repo.resolve())):
+        return RepoHealth(
+            repo=str(repo),
+            git_usable=False,
+            failure_kind="not_a_repository",
+            failure_detail="対象ではなく親の Git リポジトリを検出",
+            prunable_paths=(),
+        )
     status = run_git(repo, "status", "--porcelain")
     if status.returncode != 0:
         kind = "timeout" if status.returncode == 124 else classify_git_failure(status.stderr)

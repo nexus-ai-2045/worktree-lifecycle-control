@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -359,6 +360,143 @@ def is_dirty(path: Path) -> bool | None:
     return None if proc.returncode != 0 else bool(proc.stdout)
 
 
+def _is_reparse_point(path: Path) -> bool:
+    info = path.lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
+def checkout_identity_status(
+    path: Path, expected_common_dir: str, expected_head: str | None
+) -> str:
+    """親 repo や別 worktree の Git 状態を登録対象へ流用しない。"""
+    marker = path / ".git"
+    try:
+        if _is_reparse_point(path):
+            return "worktree_path_reparse"
+        if not os.path.lexists(marker):
+            return "git_marker_missing"
+        if _is_reparse_point(marker):
+            return "git_marker_reparse"
+    except OSError:
+        return "git_marker_unreadable"
+    proc = run_git(
+        path,
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+        "--git-dir",
+        "HEAD",
+    )
+    if proc.returncode != 0:
+        return "git_identity_unavailable"
+    lines = proc.stdout.decode("utf-8", errors="surrogateescape").splitlines()
+    if len(lines) != 4:
+        return "git_identity_unavailable"
+    if normalize_path(lines[0]) != normalize_path(str(path)):
+        return "worktree_root_mismatch"
+    if normalize_path(lines[1]) != expected_common_dir:
+        return "common_dir_mismatch"
+    if not expected_head or lines[3] != expected_head:
+        return "registered_head_mismatch"
+    git_dir = Path(lines[2])
+    if marker.is_dir():
+        if normalize_path(str(marker)) != normalize_path(str(git_dir)):
+            return "gitdir_marker_mismatch"
+    elif marker.is_file():
+        try:
+            pointer = marker.read_text(encoding="utf-8", errors="surrogateescape").strip()
+            if not pointer.startswith("gitdir: "):
+                return "gitdir_marker_mismatch"
+            target = Path(pointer[8:])
+            if not target.is_absolute():
+                target = marker.parent / target
+            if normalize_path(str(target)) != normalize_path(str(git_dir)):
+                return "gitdir_marker_mismatch"
+            backlink = (git_dir / "gitdir").read_text(
+                encoding="utf-8", errors="surrogateescape"
+            ).strip()
+            backlink_path = Path(backlink)
+            if not backlink_path.is_absolute():
+                backlink_path = git_dir / backlink_path
+            if normalize_path(str(backlink_path)) != normalize_path(str(marker)):
+                return "gitdir_backlink_mismatch"
+        except OSError:
+            return "gitdir_backlink_unavailable"
+    else:
+        return "gitdir_marker_mismatch"
+    return "verified"
+
+
+def inventory_orphan_path(path: Path, *, max_entries: int = 100_000) -> dict[str, Any]:
+    """Git が読めない実体だけを、名前の深掘りなしで読取専用棚卸しする。"""
+    files = directories = reparse = other = total_bytes = errors = 0
+    top_level: list[str] = []
+    top_level_count = 0
+    try:
+        root_reparse = _is_reparse_point(path)
+    except OSError:
+        root_reparse = False
+        errors = 1
+    stack = [path] if not root_reparse and not errors else []
+    seen = 0
+    limit_reached = False
+    while stack and not limit_reached:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as listing:
+                for entry in listing:
+                    seen += 1
+                    if current == path:
+                        top_level_count += 1
+                        if len(top_level) < 20:
+                            top_level.append(entry.name)
+                            top_level.sort()
+                        elif entry.name < top_level[-1]:
+                            top_level[-1] = entry.name
+                            top_level.sort()
+                    if seen > max_entries:
+                        limit_reached = True
+                        break
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        errors += 1
+                        continue
+                    is_reparse = bool(
+                        getattr(info, "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                    )
+                    if stat.S_ISLNK(info.st_mode) or is_reparse:
+                        reparse += 1
+                    elif stat.S_ISDIR(info.st_mode):
+                        directories += 1
+                        stack.append(Path(entry.path))
+                    elif stat.S_ISREG(info.st_mode):
+                        files += 1
+                        total_bytes += info.st_size
+                    else:
+                        other += 1
+        except OSError:
+            errors += 1
+    return {
+        "status": "partial" if errors or limit_reached or root_reparse else "complete",
+        "top_level_entries": top_level,
+        "top_level_entries_truncated": top_level_count > 20,
+        "file_count": files,
+        "directory_count": directories,
+        "reparse_count": reparse,
+        "other_count": other,
+        "total_file_bytes": total_bytes,
+        "error_count": errors,
+        "limit_reached": limit_reached,
+        "root_reparse": root_reparse,
+    }
+
+
 def ignored_paths(path: Path) -> tuple[str, ...] | None:
     proc = run_git(
         path,
@@ -607,24 +745,30 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
         raise RuntimeError(f"git worktree list failed for {repo}")
     # base ref の解決は repo 単位で 1 回。worktree ごとに引くと 66 回 git を呼ぶ。
     base_ref = resolve_base_ref(repo)
+    expected_common_dir = git_common_dir(repo)
     result: list[WorktreeRecord] = []
     for index, raw in enumerate(parse_porcelain_z(proc.stdout)):
         path_text = raw["path"]
         path = Path(path_text)
         exists = path.exists()
         entry, registered = registry_match_for_path(registry, path_text)
-        dirty = is_dirty(path) if exists else None
-        ignored = ignored_paths(path) if exists else None
-        ignored_allowed, ignored_unknown = classify_ignored_paths(ignored or ())
-        unpushed = count_unpushed(path) if exists else None
         head_sha = raw.get("head")
+        identity = (
+            checkout_identity_status(path, expected_common_dir, head_sha)
+            if exists else "path_missing"
+        )
+        valid_checkout = identity == "verified"
+        dirty = is_dirty(path) if valid_checkout else None
+        ignored = ignored_paths(path) if valid_checkout else None
+        ignored_allowed, ignored_unknown = classify_ignored_paths(ignored or ())
+        unpushed = count_unpushed(path) if valid_checkout else None
         detached = bool(raw.get("detached"))
         # 到達性と統合状態は repo 側の ref を見る。worktree が消えていても評価できる。
         reachable = head_reachability(repo, head_sha)
         integration_state = branch_integration(repo, head_sha, base_ref)
         # 証明は到達不能な時だけ試す。到達可能な worktree に git を余計に呼ばない。
         content_proof = unreachable_content_proof(repo, head_sha, base_ref) if reachable is False else None
-        commit_at = head_committer_at(path) if exists else None
+        commit_at = head_committer_at(path) if valid_checkout else None
         created_at = entry.get("created_at")
         expires_at = entry.get("expires_at")
         days_since_created = safe_calendar_day_delta(created_at, now)
@@ -651,6 +795,12 @@ def scan_repo(repo: Path, registry: dict[str, Any], now: datetime) -> list[Workt
             unreachable_content_proof=content_proof,
         )
         assessment.observations["regeneratable_ignored_paths"] = list(ignored_allowed)
+        assessment.observations["checkout_identity_status"] = identity
+        assessment.observations["git_marker_present"] = os.path.lexists(path / ".git") if exists else False
+        assessment.observations["prunable_reason"] = raw.get("prunable_reason")
+        assessment.observations["filesystem_inventory"] = (
+            inventory_orphan_path(path) if exists and not valid_checkout else None
+        )
         integration_value = entry.get("integration")
         integration = integration_value if isinstance(integration_value, dict) else {}
         integration_validation = validate_integration_evidence(integration, raw.get("head"), now=now)

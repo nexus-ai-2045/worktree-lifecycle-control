@@ -119,9 +119,11 @@ flowchart TD
 | `protected` | 到達不能・dirty・lock・primary・pin |
 | `review_required` | 台帳の宣言が壊れている |
 | `cleanup_candidate` | blocker なし。人間レビュー候補 |
-| `orphan_unknown` | path 不在など実体不明 |
+| `orphan_unknown` | path 不在、または対象 worktree の Git 同一性を確認できない |
 
 blocker に載るのは `head_becomes_unreachable`、`dirty_worktree` / `worktree_locked`、`primary_worktree`、`pinned`、測定不能、`unknown_ignored_content` だけです。未 push や owner 不明は `review_signals[]` に出ます。
+
+Git が使えない実体には、`observations.checkout_identity_status`、`prunable_reason`、`filesystem_inventory` を付けます。棚卸しは最上位の名前、ファイル・ディレクトリ件数、合計サイズ、再解析ポイント、読取エラーを記録します。棚卸し完了は残存物の削除許可を意味せず、Git の index や作業者の意図を復元した証拠にもなりません。`health` の prunable 警告も、実体を確認する前の metadata 整理を指示しません。
 
 HEAD が到達不能でも、その内容が base に取り込み済みだと git の事実だけで証明できた時は、blocker ではなく `head_unreachable_content_integrated` (signal) になります。squash / rebase merge した PR の branch を消すと、worktree に残った元の commit は必ず到達不能になるためです。根拠と証明方法は `observations.unreachable_content_proof` に出ます。証明できなければ従来どおり保護します。詳細は [ADR 0004](docs/decisions/0004-unreachable-but-integrated.md)。
 
