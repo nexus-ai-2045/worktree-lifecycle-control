@@ -46,6 +46,10 @@
 
 `workflow_dispatch` で BASE と HEAD が同一（空 diff）のときは、差分検査を緑にしない（fail-closed）。
 
+ただし HEAD に親が無い初回コミットでは、比較元が HEAD 自身になる。このときは空ツリーを比較元にして全ファイルを検査する（新しいリポの最初の push や、1コミットだけの `main` での dispatch）。
+
+repo-preflight の pin SHA は、`main` に入っている commit にする。PR ブランチの SHA は squash merge と枝削除のあと clone から取れなくなり、CI が `unable to read tree` で止まる。
+
 ## 停止線
 
 CI green や `readiness_scan` の部分 pass は、追加の公開操作を許可しません。visibility 変更、release、告知の前に次が要ります。
