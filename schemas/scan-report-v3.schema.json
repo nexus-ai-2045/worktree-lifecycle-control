@@ -1,0 +1,312 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/scan-report-v3.schema.json",
+  "title": "Worktree lifecycle scan report v3",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "observed_at",
+    "action",
+    "target",
+    "dry_run",
+    "changed",
+    "scan_completed",
+    "measurement_status",
+    "unknown_count",
+    "registry_validation_status",
+    "read_only",
+    "records",
+    "next_action",
+    "danger_count",
+    "registry_coverage"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "worktree-lifecycle-report/v3"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "action": {
+      "const": "scan"
+    },
+    "target": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1
+    },
+    "dry_run": {
+      "const": true
+    },
+    "changed": {
+      "const": false
+    },
+    "scan_completed": {
+      "type": "boolean"
+    },
+    "measurement_status": {
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "unknown_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "判定に効く事実を測れなかった件数。台帳の記入漏れは含めない。"
+    },
+    "registry_validation_status": {
+      "enum": [
+        "valid",
+        "partial",
+        "invalid",
+        "not_checked"
+      ]
+    },
+    "read_only": {
+      "const": true
+    },
+    "soft_budget": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "budget_warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/record"
+      }
+    },
+    "report_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "danger_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "worktree を削除すると HEAD が unreachable になる件数。git は警告しないため、ツールが名指しする対象。"
+    },
+    "registry_coverage": {
+      "type": "object",
+      "required": [
+        "registered",
+        "total"
+      ],
+      "properties": {
+        "registered": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "description": "台帳の網羅率。測定不能 (measurement_status) とは別物として持つ。"
+    }
+  },
+  "$defs": {
+    "record": {
+      "type": "object",
+      "required": [
+        "repo",
+        "path",
+        "observations",
+        "blockers",
+        "review_signals",
+        "disposition"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "head": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "git_locked": {
+          "type": "boolean"
+        },
+        "lock_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prunable": {
+          "type": "boolean"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "dirty": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "unpushed_commits": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "days_since_created": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "head_committer_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "days_since_head_commit": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "days_until_review": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "overdue_days": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lifecycle_status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration_status": {
+          "type": "string"
+        },
+        "integration_evidence_valid": {
+          "type": "boolean"
+        },
+        "integration_evidence_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "context_saved": {
+          "type": "boolean"
+        },
+        "observations": {
+          "type": "object"
+        },
+        "blockers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "review_signals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "disposition": {
+          "enum": [
+            "orphan_unknown",
+            "active",
+            "protected",
+            "review_required",
+            "cleanup_candidate"
+          ]
+        },
+        "detached": {
+          "type": "boolean"
+        },
+        "head_reachable_elsewhere": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "この worktree の HEAD 以外の ref から到達できるか。null は測定不能。"
+        },
+        "integration_state": {
+          "enum": [
+            "integrated",
+            "not_integrated",
+            "unknown"
+          ]
+        },
+        "pinned": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

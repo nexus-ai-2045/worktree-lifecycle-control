@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/checkout-health-v1.schema.json",
+  "title": "Checkout health report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "observed_at",
+    "action",
+    "target",
+    "roots",
+    "read_only",
+    "counts",
+    "repos",
+    "leftover_worktree_dirs",
+    "repair_hints",
+    "next_action"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "checkout-health-report/v1"
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "observed_at": {
+      "type": "string"
+    },
+    "action": {
+      "const": "checkout_health"
+    },
+    "target": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "roots": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "read_only": {
+      "const": true
+    },
+    "counts": {
+      "type": "object",
+      "required": [
+        "dubious_ownership",
+        "git_unusable_other",
+        "prunable_worktrees",
+        "leftover_worktree_dirs"
+      ],
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["repo", "git_usable", "failure_kind", "failure_detail", "prunable_paths"],
+        "properties": {
+          "repo": { "type": "string" },
+          "git_usable": { "type": "boolean" },
+          "failure_kind": {
+            "enum": ["dubious_ownership", "not_a_repository", "timeout", "other", null]
+          },
+          "failure_detail": { "type": ["string", "null"] },
+          "prunable_paths": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "leftover_worktree_dirs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "gitdir_target"],
+        "properties": {
+          "path": { "type": "string" },
+          "gitdir_target": { "type": "string" }
+        }
+      }
+    },
+    "repair_hints": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "ratchet": {
+      "type": "object",
+      "required": ["baseline_counts", "regressions", "ok"],
+      "properties": {
+        "baseline_counts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "regressions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ok": { "type": "boolean" }
+      }
+    },
+    "baseline_updated": { "type": "string" },
+    "next_action": { "type": "string" }
+  }
+}
