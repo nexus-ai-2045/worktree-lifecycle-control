@@ -16,7 +16,7 @@ permissions:
 
 env:
   # repo-preflight 上流の検査ロジック正本（コピーしない）。SHA 固定 + checkout 後に照合。
-  REPO_PREFLIGHT_SHA: acf8cadd6822498f8ffa737a140ed76bdea81f6f
+  REPO_PREFLIGHT_SHA: 4fc1190c2020ec8c19a9b0c62749369e0439fbaf
 
 jobs:
   test:
@@ -151,6 +151,11 @@ jobs:
             exit 1
           fi
           BASE_RESOLVED="$(git rev-parse "$BASE")"
+          # 比較元が HEAD 自身で、HEAD が親の無い初回コミットなら、空ツリーと比べて全ファイルを検査する。
+          # （新しいリポの最初の push や、1コミットだけの main で dispatch したとき。空 diff の緑を防ぐ）
+          if [ "$BASE_RESOLVED" = "$HEAD" ] && ! git rev-parse --verify -q HEAD^ >/dev/null; then
+            BASE_RESOLVED="$(git hash-object -t tree /dev/null)"
+          fi
           # #127 相当: dispatch で BASE==HEAD（空 diff）なら落とす。緑の空振りを防ぐ。
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$BASE_RESOLVED" = "$HEAD" ]; then
             echo "空diff fail-closed: workflow_dispatch で BASE==HEAD ($HEAD)" >&2
