@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package and test dependencies
+        run: python -m pip install -e ".[test]"
+      - name: Validate JSON Schemas
+        shell: python
+        run: |
+          import json
+          import tempfile
+          from pathlib import Path
+          from jsonschema import Draft202012Validator, FormatChecker
+          from referencing import Registry, Resource
+          from worktree_lifecycle_control.cli import main
+
+          schemas = {}
+          registry = Registry()
+          for path in Path("schemas").glob("*.schema.json"):
+              schema = json.loads(path.read_text(encoding="utf-8"))
+              Draft202012Validator.check_schema(schema)
+              resource = Resource.from_contents(schema)
+              registry = registry.with_resource(schema["$id"], resource).with_resource(path.name, resource)
+              schemas[path.name] = schema
+
+          checker = FormatChecker()
+          example = json.loads(Path("registry.example.json").read_text(encoding="utf-8"))
+          Draft202012Validator(schemas["registry-v1.schema.json"], registry=registry, format_checker=checker).validate(example)
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary)
+              scan_path = root / "scan.json"
+              review_path = root / "review.json"
+              assert main(["scan", "--repo", ".", "--registry", "registry.example.json", "--report-path", str(scan_path), "--json"]) == 0
+              assert main(["review-packet", "--repo", ".", "--registry", "registry.example.json", "--report-path", str(review_path), "--json"]) == 0
+              for payload_path, schema_name in ((scan_path, "scan-report-v2.schema.json"), (review_path, "review-packet-v2.schema.json")):
+                  payload = json.loads(payload_path.read_text(encoding="utf-8"))
+                  Draft202012Validator(schemas[schema_name], registry=registry, format_checker=checker).validate(payload)
+      - name: Compile package
+        run: python -m compileall -q src
+      - name: Run tests
+        run: python -m pytest

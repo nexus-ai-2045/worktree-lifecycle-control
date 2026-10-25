@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nexus-ai.local/schemas/worktree-lifecycle/integration-evidence-v3.schema.json",
+  "title": "Worktree integration evidence v3",
+  "type": "object",
+  "required": ["status", "provider", "evidence_type", "provider_record_id", "subject_head_sha", "resulting_base_sha", "actor", "observed_at", "subject_merged_at"],
+  "properties": {
+    "status": {"const": "verified"},
+    "provider": {"type": "string", "minLength": 1, "not": {"const": "unknown"}},
+    "evidence_type": {"enum": ["github_pr_merged"], "description": "git から導出できない事実だけを宣言する。"},
+    "provider_record_id": {"type": "string", "minLength": 1, "not": {"const": "unknown"}},
+    "subject_head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "resulting_base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "actor": {"type": "string", "minLength": 1, "not": {"const": "unknown"}, "description": "統合を実行した主体。"},
+    "observed_at": {"type": "string", "format": "date-time", "description": "closeout collection が GitHub 状態を観測した時刻。"},
+    "subject_merged_at": {"type": "string", "format": "date-time", "description": "PR が merge された時刻。"},
+    "observed_by": {"type": "string", "minLength": 1, "description": "収集を実行した主体。"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": "worktree-lifecycle/v2",
+  "soft_budget_per_repo": 3,
+  "entries": {
+    "C:\\example\\repo-worktrees\\feature-a": {
+      "pin": true,
+      "reason": "リリース直前の検証環境。統合済みでもフォルダは残す",
+      "return_path": "task:feature-a",
+      "expires_at": "2026-08-20T10:00:00+09:00"
+    }
+  }
+}
