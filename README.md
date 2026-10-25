@@ -7,7 +7,9 @@ Git worktree を増えたフォルダとして放置せず、到達不能な det
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](pyproject.toml)
 
-結びが残っている worktree は、消しても branch から戻せる。切れた 1 台だけが、git の外に落ちる。根拠は [ADR 0002](docs/decisions/0002-protect-what-git-does-not.md)。
+[![紐で幹に結ばれた作業台と、紐が切れて浮かぶ 1 台](docs/assets/detached-worktree-hero.jpg)](docs/decisions/0002-protect-what-git-does-not.md)
+
+結びが残っている worktree は、消しても branch から戻せる。切れた 1 台だけが、git の外に落ちる。絵は [ADR 0002](docs/decisions/0002-protect-what-git-does-not.md) へ行く。
 
 ## 目的 — git が守らない 1 行だけを守る
 
