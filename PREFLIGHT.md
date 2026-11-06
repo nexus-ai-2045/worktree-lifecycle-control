@@ -58,3 +58,7 @@ CI green や `readiness_scan` の部分 pass は、追加の公開操作を許�
 2. secret scan と personal path scan の再測定（現在 tree と履歴を分ける）
 3. 現行 CI 結果の再確認
 4. 対象 repository と正確な操作文面での、現在会話での明示承認
+
+## base-guardの廃止
+
+base-guardの独立ワークフローは廃止しました。共通preflightの固定参照は、廃止後の統合コミット fe2e90f91615a5e5ed3f9b2b497c99f5786e5847 へ揃えます。必須チェックは all-green、最新baseへの追従は有効とします。名義・秘密情報・製品テストの検査結果を確認してマージします。
