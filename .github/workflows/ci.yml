@@ -16,8 +16,8 @@ permissions:
 
 env:
   # repo-preflight 上流の検査ロジック正本（コピーしない）。SHA 固定 + checkout 後に照合。
-  # （仮）新しい repo-preflight の承認済み 40桁 SHA に置き換える。public-privacy-preflight.yml・preflight-guard.yml と同じ値。
-  REPO_PREFLIGHT_SHA: 5b7c774deb8e9abcf0fce0c5f39ec1c1f3a894f3
+  # （仮）新しい repo-preflight の承認済み 40桁 SHA に置き換える。public-privacy-preflight.yml と同じ値。
+  REPO_PREFLIGHT_SHA: fe2e90f91615a5e5ed3f9b2b497c99f5786e5847
 
 jobs:
   test:
