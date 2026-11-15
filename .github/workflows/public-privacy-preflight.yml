@@ -13,7 +13,7 @@ permissions:
   contents: read
 jobs:
   preflight:
-    uses: nexus-ai-2045/repo-preflight/.github/workflows/preflight-gate.yml@fe2e90f91615a5e5ed3f9b2b497c99f5786e5847
+    uses: nexus-ai-2045/repo-preflight/.github/workflows/preflight-gate.yml@62ef4e47ad60af2a73485da169bbe4f349c742a2
     with:
       preflight-ref: fe2e90f91615a5e5ed3f9b2b497c99f5786e5847
       baseline: .repo-preflight/ratchet-baseline.json
